@@ -14,29 +14,31 @@ auth_bp = Blueprint("auth", __name__)
 
 
 def _user_payload(user):
-    """Strip password; return only id, name, email, role for JSON responses."""
+    """Strip password; return only id, name, email, role, specialization for JSON responses."""
     return {
         "id": user.id,
         "name": user.name,
         "email": user.email,
         "role": user.role,
+        "specialization": user.specialization,
     }
 
 
 @auth_bp.post("/register")
 def register():
-    """Register: expects JSON { name, email, password, role? }. Returns 201 + user or 400 on error."""
+    """Register: expects JSON { name, email, password, role?, specialization? }. Returns 201 + user or 400 on error."""
     data = request.get_json(silent=True) or {}
     name = data.get("name")
     email = data.get("email")
     password = data.get("password")
     role = data.get("role", "patient")
+    specialization = data.get("specialization")
 
     if not name or not email or not password:
         return jsonify({"message": "Missing name, email, or password"}), 400
 
     try:
-        user = register_user(name=name, email=email, password=password, role=role)
+        user = register_user(name=name, email=email, password=password, role=role, specialization=specialization)
         return jsonify({"message": "Registration successful", "user": _user_payload(user)}), 201
     except ValueError as e:
         return jsonify({"message": str(e)}), 400

@@ -18,6 +18,7 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(32), nullable=False, default="patient")  # patient | doctor | admin
+    specialization = db.Column(db.String(128), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationships
@@ -29,6 +30,15 @@ class User(db.Model):
     )
     appointments_as_doctor = db.relationship(
         "Appointment", back_populates="doctor", foreign_keys="Appointment.doctor_id"
+    )
+    consultations_as_patient = db.relationship(
+        "Consultation", back_populates="patient", foreign_keys="Consultation.patient_id"
+    )
+    consultations_as_doctor = db.relationship(
+        "Consultation", back_populates="doctor", foreign_keys="Consultation.doctor_id"
+    )
+    followups = db.relationship(
+        "FollowUp", back_populates="sender", foreign_keys="FollowUp.sender_id"
     )
 
     def __repr__(self):

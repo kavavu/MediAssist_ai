@@ -1,246 +1,351 @@
 """
-Symptom classification model using scikit-learn.
+Symptom classification model for MediAssist AI.
 
-Current behaviour:
-------------------
-- On first use, loads a persisted model from artifacts/symptom_model.joblib.
-- If no persisted model exists yet, trains a simple placeholder model on a
-  small hard-coded dataset and saves it.
-
-Extensions for safer, more academic usage:
-------------------------------------------
-- Support for training on a real dataset via backend/app/ml/train_model.py
-- Optional loading of a valid_symptoms.json list for spell correction and
-  symptom validation.
-- Utility to return the top-k predictions with confidence scores.
-
-The existing `predict(text)` function is kept for backwards compatibility and
-still returns a single (condition, confidence) tuple. Higher-level services
-use `predict_topk(...)` for richer behaviour.
+This module handles:
+- Loading the trained ML model
+- Processing symptom input (text to binary vector)
+- Making predictions with confidence scores
+- Spell correction and validation
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from difflib import get_close_matches
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import joblib
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
+import numpy as np
+import pandas as pd
 
-# Directory for persisted model (next to this module)
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Directory for persisted model
 _ML_DIR = os.path.dirname(os.path.abspath(__file__))
 _MODEL_PATH = os.path.join(_ML_DIR, "artifacts", "symptom_model.joblib")
 _VALID_SYMPTOMS_PATH = os.path.join(_ML_DIR, "artifacts", "valid_symptoms.json")
 
-# Placeholder dataset: (symptoms text, condition) for initial training
-_PLACEHOLDER_DATA = [
-    ("headache fever body ache tired", "flu"),
-    ("headache fever chills cough", "flu"),
-    ("runny nose sneezing sore throat", "common_cold"),
-    ("cough congestion runny nose", "common_cold"),
-    ("stomach pain nausea vomiting", "gastric"),
-    ("abdominal pain bloating indigestion", "gastric"),
-    ("chest pain shortness of breath", "cardiac_concern"),
-    ("dizziness fatigue weakness", "fatigue"),
-    ("sore throat fever swollen glands", "strep_throat"),
-    ("rash itching skin redness", "skin_allergy"),
-    ("joint pain swelling stiffness", "arthritis"),
-    ("back pain muscle ache", "musculoskeletal"),
-    ("headache only mild", "tension_headache"),
-    ("fever only high temperature", "fever"),
-    ("cough only dry cough", "cough"),
-]
-
-# Cached state; set once by loaders on first use
-_pipeline: Optional[Pipeline] = None
+# Cached state
+_model_data: Optional[Dict] = None
 _valid_symptoms: Optional[List[str]] = None
 
 
-def _train_and_save(path: str) -> Pipeline:
-    """Train TfidfVectorizer + MultinomialNB on _PLACEHOLDER_DATA, save as joblib file."""
-    texts = [t for t, _ in _PLACEHOLDER_DATA]
-    labels = [c for _, c in _PLACEHOLDER_DATA]
-    pipeline = Pipeline(
-        [
-            ("vec", TfidfVectorizer(max_features=500, ngram_range=(1, 2))),
-            ("clf", MultinomialNB()),
-        ]
-    )
-    pipeline.fit(texts, labels)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    joblib.dump(pipeline, path)
-    return pipeline
-
-
-def load_model() -> Pipeline:
+def load_model() -> Dict:
     """
-    Load the symptom classification model from disk.
-    If the file does not exist, train with placeholder data and save.
+    Load the trained model and metadata from disk.
+    
+    Returns:
+        Dictionary containing:
+        - 'model': Trained sklearn model
+        - 'symptom_names': List of symptom feature names
+        - 'accuracy': Model accuracy score
+        - 'version': Model version
     """
-    global _pipeline
-    if _pipeline is not None:
-        return _pipeline
-    if os.path.isfile(_MODEL_PATH):
-        _pipeline = joblib.load(_MODEL_PATH)
-    else:
-        _pipeline = _train_and_save(_MODEL_PATH)
-    return _pipeline
-
-
-def _infer_valid_symptoms_from_placeholder() -> List[str]:
-    """Derive a basic valid-symptom vocabulary from the placeholder dataset."""
-    vocab = set()
-    for text, _ in _PLACEHOLDER_DATA:
-        for token in text.lower().split():
-            token = token.strip()
-            if token:
-                vocab.add(token)
-    return sorted(vocab)
+    global _model_data
+    
+    if _model_data is not None:
+        return _model_data
+    
+    if not os.path.isfile(_MODEL_PATH):
+        logger.error(f"Model file not found: {_MODEL_PATH}")
+        raise FileNotFoundError(
+            f"Model file not found. Please run training first: {_MODEL_PATH}"
+        )
+    
+    try:
+        _model_data = joblib.load(_MODEL_PATH)
+        logger.info(f"Model loaded successfully. Accuracy: {_model_data.get('accuracy', 'N/A')}")
+        return _model_data
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        raise
 
 
 def load_valid_symptoms() -> List[str]:
     """
-    Load the valid symptoms list from artifacts/valid_symptoms.json.
-
-    If the file does not exist yet (e.g. real dataset not trained), fall back
-    to a vocabulary derived from the placeholder dataset. This keeps the system
-    working today while allowing a richer list once a real dataset is used.
+    Load the list of valid symptom names.
+    
+    Returns:
+        List of symptom names that the model recognizes
     """
     global _valid_symptoms
+    
     if _valid_symptoms is not None:
         return _valid_symptoms
-
+    
     if os.path.isfile(_VALID_SYMPTOMS_PATH):
         try:
             with open(_VALID_SYMPTOMS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                _valid_symptoms = sorted({str(s).strip().lower() for s in data if str(s).strip()})
-            else:
-                _valid_symptoms = _infer_valid_symptoms_from_placeholder()
-        except (OSError, json.JSONDecodeError):
-            _valid_symptoms = _infer_valid_symptoms_from_placeholder()
-    else:
-        _valid_symptoms = _infer_valid_symptoms_from_placeholder()
-
-    return _valid_symptoms
+                _valid_symptoms = json.load(f)
+            logger.info(f"Loaded {len(_valid_symptoms)} valid symptoms")
+            return _valid_symptoms
+        except Exception as e:
+            logger.warning(f"Failed to load valid symptoms: {e}")
+    
+    # Fallback: extract from model data
+    try:
+        model_data = load_model()
+        _valid_symptoms = model_data.get("symptom_names", [])
+        return _valid_symptoms
+    except:
+        logger.error("Could not load valid symptoms list")
+        return []
 
 
 def _tokenize(symptoms_text: str) -> List[str]:
     """
-    Basic tokenizer: split on whitespace and commas, lower-case, drop empties.
+    Tokenize symptoms text into individual symptoms.
+    
+    Args:
+        symptoms_text: Raw symptoms text (comma or space separated)
+        
+    Returns:
+        List of symptom tokens
     """
     if not symptoms_text:
         return []
-    raw = symptoms_text.replace(",", " ")
-    tokens = [t.strip().lower() for t in raw.split()]
+    
+    # Replace commas with spaces, then split
+    text = symptoms_text.replace(",", " ").replace("_", " ")
+    tokens = [t.strip().lower() for t in text.split()]
     return [t for t in tokens if t]
 
 
-def _correct_tokens(tokens: Sequence[str], valid_symptoms: Sequence[str], cutoff: float = 0.8) -> List[str]:
+def _correct_symptoms(
+    symptoms: List[str],
+    valid_symptoms: List[str],
+    cutoff: float = 0.6
+) -> List[str]:
     """
-    Apply simple spell correction using difflib.get_close_matches.
-
-    For each token, if a close match exists in valid_symptoms above the cutoff,
-    use the closest match; otherwise keep the original token.
+    Apply spell correction to symptoms using fuzzy matching.
+    
+    Args:
+        symptoms: List of input symptoms
+        valid_symptoms: List of valid symptom names
+        cutoff: Minimum similarity score (0-1)
+        
+    Returns:
+        List of corrected symptoms
     """
-    corrected: List[str] = []
-    vocab = list(valid_symptoms)
-    for tok in tokens:
-        matches = get_close_matches(tok, vocab, n=1, cutoff=cutoff)
+    corrected = []
+    valid_lower = {v.lower(): v for v in valid_symptoms}
+    
+    for symptom in symptoms:
+        symptom_lower = symptom.lower()
+        
+        # Exact match
+        if symptom_lower in valid_lower:
+            corrected.append(valid_lower[symptom_lower])
+            continue
+        
+        # Try fuzzy matching
+        matches = get_close_matches(
+            symptom_lower,
+            valid_lower.keys(),
+            n=1,
+            cutoff=cutoff
+        )
+        
         if matches:
-            corrected.append(matches[0])
+            corrected.append(valid_lower[matches[0]])
+            logger.debug(f"Corrected '{symptom}' -> '{valid_lower[matches[0]]}'")
         else:
-            corrected.append(tok)
+            # Keep original if no match found
+            corrected.append(symptom)
+    
     return corrected
 
 
-def _validate_tokens(tokens: Sequence[str], valid_symptoms: Sequence[str]) -> bool:
+def _symptoms_to_vector(
+    symptoms: List[str],
+    symptom_names: List[str]
+) -> pd.DataFrame:
     """
-    Check that at least one token matches the known symptoms list.
+    Convert list of symptoms to binary feature vector.
+    
+    Args:
+        symptoms: List of symptom names
+        symptom_names: List of all possible symptom features
+        
+    Returns:
+        DataFrame with binary features (1 if symptom present, 0 otherwise)
     """
-    valid_set = set(valid_symptoms)
-    return any(t in valid_set for t in tokens)
+    # Create binary vector
+    symptom_set = set(s.lower() for s in symptoms)
+    vector = [1 if name.lower() in symptom_set else 0 for name in symptom_names]
+    
+    # Convert to DataFrame with proper column names
+    return pd.DataFrame([vector], columns=symptom_names)
 
 
-def predict(symptoms_text: str) -> tuple:
+def predict(symptoms_text: str) -> Tuple[Optional[str], float]:
     """
-    Backwards-compatible prediction helper.
-
-    Given symptoms text, return (predicted_condition, confidence_score).
-    Confidence is 0.0 to 1.0.
-
-    This does **not** expose validation information or multiple predictions.
-    Newer code should use `predict_topk` instead.
+    Predict disease from symptoms text.
+    
+    Args:
+        symptoms_text: String of symptoms (e.g., "fever headache cough")
+        
+    Returns:
+        Tuple of (predicted_condition, confidence_score)
+        Returns (None, 0.0) if prediction fails
     """
-    pipe = load_model()
-    if not (symptoms_text or "").strip():
+    logger.info(f"Prediction request: '{symptoms_text}'")
+    
+    if not symptoms_text or not symptoms_text.strip():
+        logger.warning("Empty symptoms text received")
         return None, 0.0
-    text = (symptoms_text or "").strip()
-    pred = pipe.predict([text])
-    proba = pipe.predict_proba([text])
-    condition = pred[0]
-    confidence = float(proba.max())
-    return condition, confidence
+    
+    try:
+        # Load model
+        model_data = load_model()
+        model = model_data["model"]
+        symptom_names = model_data["symptom_names"]
+        
+        # Tokenize and correct symptoms
+        tokens = _tokenize(symptoms_text)
+        logger.info(f"Tokens: {tokens}")
+        
+        if not tokens:
+            logger.warning("No valid symptom tokens found")
+            return None, 0.0
+        
+        valid_symptoms = load_valid_symptoms()
+        corrected = _correct_symptoms(tokens, valid_symptoms)
+        logger.info(f"Corrected symptoms: {corrected}")
+        
+        # Convert to feature vector
+        X = _symptoms_to_vector(corrected, symptom_names)
+        
+        # Predict
+        prediction = model.predict(X)[0]
+        
+        # Get confidence (probability)
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)[0]
+            confidence = float(proba.max())
+        else:
+            confidence = 0.8  # Default confidence if not available
+        
+        logger.info(f"Prediction: {prediction}, Confidence: {confidence:.4f}")
+        
+        return prediction, confidence
+        
+    except Exception as e:
+        logger.error(f"Prediction error: {e}")
+        return None, 0.0
 
 
 def predict_topk(
     symptoms_text: str,
     k: int = 3,
-    confidence_threshold: float = 0.40,
-) -> Dict[str, object]:
+    confidence_threshold: float = 0.30
+) -> Dict:
     """
-    Rich prediction helper used by the service layer.
-
-    Returns a dict with keys:
-      - "cleaned_text": the normalized, spell-corrected symptom string
-      - "predictions": list of { "condition": str, "confidence": float }
-      - "low_confidence": bool (True if top prediction < threshold)
-
-    In case of unrecognized symptoms, returns:
-      - {"error": "Symptoms not recognized. Please enter valid medical symptoms."}
+    Predict top-k diseases from symptoms with confidence scores.
+    
+    Args:
+        symptoms_text: String of symptoms
+        k: Number of top predictions to return
+        confidence_threshold: Minimum confidence for "low_confidence" flag
+        
+    Returns:
+        Dictionary with:
+        - cleaned_text: Normalized symptom string
+        - predictions: List of {condition, confidence} dicts
+        - low_confidence: Boolean indicating if top prediction is below threshold
     """
-    text = (symptoms_text or "").strip()
-    if not text:
+    logger.info(f"Top-k prediction request: '{symptoms_text}'")
+    
+    if not symptoms_text or not symptoms_text.strip():
         return {
             "cleaned_text": "",
             "predictions": [],
-            "low_confidence": True,
+            "low_confidence": True
         }
-
-    valid_symptoms = load_valid_symptoms()
-    raw_tokens = _tokenize(text)
-    corrected_tokens = _correct_tokens(raw_tokens, valid_symptoms)
-
-    # Validate against known symptom vocabulary
-    if not _validate_tokens(corrected_tokens, valid_symptoms):
+    
+    try:
+        # Load model
+        model_data = load_model()
+        model = model_data["model"]
+        symptom_names = model_data["symptom_names"]
+        
+        # Tokenize and correct
+        tokens = _tokenize(symptoms_text)
+        valid_symptoms = load_valid_symptoms()
+        corrected = _correct_symptoms(tokens, valid_symptoms)
+        
+        if not corrected:
+            return {
+                "error": "No valid symptoms recognized. Please enter valid medical symptoms."
+            }
+        
+        cleaned_text = ", ".join(corrected)
+        
+        # Convert to vector
+        X = _symptoms_to_vector(corrected, symptom_names)
+        
+        # Get predictions
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)[0]
+            classes = model.classes_
+            
+            # Sort by probability
+            scored = sorted(
+                [{"condition": cls, "confidence": float(p)} 
+                 for cls, p in zip(classes, proba)],
+                key=lambda x: x["confidence"],
+                reverse=True
+            )
+            
+            top = scored[:max(1, k)]
+            top_conf = top[0]["confidence"] if top else 0.0
+            
+            return {
+                "cleaned_text": cleaned_text,
+                "predictions": top,
+                "low_confidence": top_conf < confidence_threshold
+            }
+        else:
+            # Fallback for models without predict_proba
+            pred = model.predict(X)[0]
+            return {
+                "cleaned_text": cleaned_text,
+                "predictions": [{"condition": pred, "confidence": 0.8}],
+                "low_confidence": False
+            }
+            
+    except Exception as e:
+        logger.error(f"Top-k prediction error: {e}")
         return {
-            "error": "Symptoms not recognized. Please enter valid medical symptoms."
+            "error": f"Prediction failed: {str(e)}"
         }
 
-    cleaned_text = " ".join(corrected_tokens)
 
-    pipe = load_model()
-    proba = pipe.predict_proba([cleaned_text])[0]
-    classes = list(pipe.classes_)
-
-    # Pair up conditions with probabilities and sort descending
-    scored = sorted(
-        [{"condition": cls, "confidence": float(p)} for cls, p in zip(classes, proba)],
-        key=lambda x: x["confidence"],
-        reverse=True,
-    )
-
-    top = scored[: max(1, k)]
-    top_conf = top[0]["confidence"] if top else 0.0
-    low_confidence = top_conf < confidence_threshold
-
-    return {
-        "cleaned_text": cleaned_text,
-        "predictions": top,
-        "low_confidence": low_confidence,
-    }
+def get_model_info() -> Dict:
+    """
+    Get information about the loaded model.
+    
+    Returns:
+        Dictionary with model metadata
+    """
+    try:
+        model_data = load_model()
+        return {
+            "loaded": True,
+            "accuracy": model_data.get("accuracy", "N/A"),
+            "version": model_data.get("version", "N/A"),
+            "num_symptoms": len(model_data.get("symptom_names", [])),
+            "model_path": _MODEL_PATH
+        }
+    except Exception as e:
+        return {
+            "loaded": False,
+            "error": str(e)
+        }

@@ -5,12 +5,21 @@
  * - Doctor: Doctor Dashboard
  * - All logged-in: email + Logout button
  */
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getCurrentUser, logout } from "../services/auth.js";
 
 export default function NavBar() {
   const navigate = useNavigate();
+  const [, forceUpdate] = useState(0);
+
+  // Re-read user when auth state changes across tabs/components
+  useEffect(() => {
+    const handleAuthChange = () => forceUpdate((n) => n + 1);
+    window.addEventListener("auth-change", handleAuthChange);
+    return () => window.removeEventListener("auth-change", handleAuthChange);
+  }, []);
+
   const user = getCurrentUser();
 
   const handleLogout = () => {

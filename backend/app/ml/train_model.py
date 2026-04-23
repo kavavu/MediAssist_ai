@@ -1,175 +1,225 @@
 """
-Training script for the symptom classifier using a real medical dataset.
+Training script for the symptom classifier using Training.csv and Testing.csv datasets.
 
-This script is **not** run automatically. You will run it manually once you
-have added a CSV dataset under `backend/app/ml/datasets/`.
+Dataset format:
+- Binary encoded symptoms (0/1) where each column is a symptom
+- Last column is the target label (disease/condition)
 
-Expected dataset schema (wide format):
-    symptom_1, symptom_2, ... symptom_17, prognosis
+Usage:
+    cd backend
+    python -m app.ml.train_model
 
-Each `symptom_i` cell should contain the name of a symptom for that case
-or be empty/NaN. `prognosis` is the target label (diagnosis/condition).
-
-The script will:
-  - Load the CSV
-  - Combine all symptom_* columns into a single text field
-  - Train a TF-IDF + MultinomialNB pipeline
-  - Evaluate on a held-out test set and print accuracy
-  - Save the trained model to:
-        backend/app/ml/artifacts/symptom_model.joblib
-  - Save the list of valid symptoms to:
-        backend/app/ml/artifacts/valid_symptoms.json
+Output:
+- symptom_model.joblib: Trained model pipeline
+- valid_symptoms.json: List of valid symptom names
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import joblib
+import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
+# Paths
 ML_DIR = Path(__file__).resolve().parent
 ARTIFACTS_DIR = ML_DIR / "artifacts"
+DATASETS_DIR = ML_DIR / "datasets"
 MODEL_PATH = ARTIFACTS_DIR / "symptom_model.joblib"
 VALID_SYMPTOMS_PATH = ARTIFACTS_DIR / "valid_symptoms.json"
-DATASETS_DIR = ML_DIR / "datasets"
 
 
-def _load_dataset(csv_path: Path) -> Tuple[List[str], List[str], List[str]]:
+def load_dataset(csv_path: Path) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     """
-    Load the CSV dataset and return (texts, labels, valid_symptoms_list).
-
-    - symptom_* columns are combined into a single space-separated text field.
-    - prognosis column is used as the label.
-    - valid_symptoms_list is the unique set of non-empty symptom values
-      (lower-cased) from all symptom_* columns.
+    Load a CSV dataset with binary-encoded symptoms.
+    
+    Args:
+        csv_path: Path to CSV file
+        
+    Returns:
+        X: Feature DataFrame (symptom columns)
+        y: Target Series (disease labels)
+        symptom_names: List of symptom column names
     """
+    logger.info(f"Loading dataset from: {csv_path}")
+    
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Dataset not found: {csv_path}")
+    
     df = pd.read_csv(csv_path)
-
-    # Infer symptom columns by prefix
-    symptom_cols = [c for c in df.columns if c.lower().startswith("symptom_")]
-    if not symptom_cols:
-        raise ValueError("No symptom_* columns found in dataset.")
-
-    if "prognosis" not in df.columns:
-        raise ValueError("Dataset must contain a 'prognosis' column.")
-
-    texts: List[str] = []
-    labels: List[str] = []
-    all_symptoms_set = set()
-
-    for _, row in df.iterrows():
-        row_symptoms: List[str] = []
-        for col in symptom_cols:
-            val = row.get(col)
-            if pd.isna(val):
-                continue
-            s = str(val).strip()
-            if not s:
-                continue
-            s_lower = s.lower()
-            row_symptoms.append(s_lower)
-            all_symptoms_set.add(s_lower)
-
-        if not row_symptoms:
-            # Skip rows that have no symptoms at all
-            continue
-
-        text = " ".join(row_symptoms)
-        label = str(row["prognosis"]).strip()
-        if not label:
-            continue
-
-        texts.append(text)
-        labels.append(label)
-
-    if not texts:
-        raise ValueError("No training examples could be constructed from the dataset.")
-
-    valid_symptoms_list = sorted(all_symptoms_set)
-    return texts, labels, valid_symptoms_list
+    logger.info(f"Loaded {len(df)} rows, {len(df.columns)} columns")
+    
+    # Find the target column ('prognosis')
+    if 'prognosis' not in df.columns:
+        raise ValueError("Dataset must contain a 'prognosis' column")
+    
+    # Get all symptom columns (exclude 'prognosis' and any unnamed columns)
+    symptom_cols = [c for c in df.columns if c not in ['prognosis'] and not c.startswith('Unnamed:')]
+    
+    logger.info(f"Target column: prognosis")
+    logger.info(f"Number of symptoms: {len(symptom_cols)}")
+    
+    # Extract features and target
+    X = df[symptom_cols].fillna(0).astype(int)
+    y = df['prognosis'].fillna("Unknown")
+    
+    # Clean symptom names (remove underscores, extra spaces)
+    clean_symptom_names = [s.replace("_", " ").strip() for s in symptom_cols]
+    X.columns = clean_symptom_names
+    
+    # Remove rows with missing targets
+    valid_mask = y != "Unknown"
+    X = X[valid_mask]
+    y = y[valid_mask]
+    
+    logger.info(f"Final dataset: {len(X)} samples, {len(clean_symptom_names)} features")
+    logger.info(f"Number of unique diseases: {y.nunique()}")
+    
+    return X, y, clean_symptom_names
 
 
-def _build_pipeline() -> Pipeline:
-    """Create the TF-IDF + MultinomialNB pipeline."""
-    return Pipeline(
-        [
-            ("vec", TfidfVectorizer(max_features=5000, ngram_range=(1, 2))),
-            ("clf", MultinomialNB()),
-        ]
-    )
-
-
-def train_from_csv(csv_filename: str) -> None:
+def train_model(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    model_type: str = "random_forest"
+) -> Tuple[object, float]:
     """
-    Train the model from a CSV file located in `datasets/`.
-
-    Example:
-        python -m backend.app.ml.train_model my_dataset.csv
+    Train a classification model.
+    
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        X_test: Testing features
+        y_test: Testing labels
+        model_type: Type of model ('random_forest', 'logistic_regression', 'naive_bayes')
+        
+    Returns:
+        model: Trained model
+        accuracy: Test accuracy
     """
-    csv_path = DATASETS_DIR / csv_filename
-    if not csv_path.is_file():
-        raise FileNotFoundError(f"Dataset CSV not found at {csv_path}")
+    logger.info(f"Training {model_type} model...")
+    
+    if model_type == "random_forest":
+        model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=20,
+            random_state=42,
+            n_jobs=-1
+        )
+    elif model_type == "logistic_regression":
+        model = LogisticRegression(
+            max_iter=1000,
+            random_state=42,
+            n_jobs=-1
+        )
+    elif model_type == "naive_bayes":
+        model = MultinomialNB()
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+    
+    # Train
+    model.fit(X_train, y_train)
+    
+    # Evaluate
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    logger.info(f"Test Accuracy: {accuracy:.4f}")
+    logger.info("\nClassification Report:")
+    logger.info("\n" + classification_report(y_test, y_pred, zero_division=0))
+    
+    return model, accuracy
 
-    print(f"Loading dataset from: {csv_path}")
-    texts, labels, valid_symptoms = _load_dataset(csv_path)
-    print(f"Loaded {len(texts)} examples with {len(valid_symptoms)} unique symptoms.")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        texts, labels, test_size=0.2, random_state=42, stratify=labels
-    )
-
-    pipeline = _build_pipeline()
-    print("Training TF-IDF + MultinomialNB pipeline...")
-    pipeline.fit(X_train, y_train)
-
-    print("Evaluating on held-out test set...")
-    y_pred = pipeline.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    print(f"Test accuracy: {acc:.4f}")
-
+def save_artifacts(
+    model: object,
+    symptom_names: List[str],
+    accuracy: float
+) -> None:
+    """
+    Save model and symptom list to artifacts directory.
+    
+    Args:
+        model: Trained model
+        symptom_names: List of valid symptom names
+        accuracy: Model accuracy
+    """
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    print(f"Saving trained model to: {MODEL_PATH}")
-    joblib.dump(pipeline, MODEL_PATH)
-
-    print(f"Saving valid symptoms list to: {VALID_SYMPTOMS_PATH}")
+    
+    # Save model with metadata
+    model_data = {
+        "model": model,
+        "symptom_names": symptom_names,
+        "accuracy": accuracy,
+        "version": "1.0"
+    }
+    
+    joblib.dump(model_data, MODEL_PATH)
+    logger.info(f"Model saved to: {MODEL_PATH}")
+    
+    # Save valid symptoms list
     with open(VALID_SYMPTOMS_PATH, "w", encoding="utf-8") as f:
-        json.dump(valid_symptoms, f, ensure_ascii=False, indent=2)
-
-    print("Training complete.")
+        json.dump(symptom_names, f, ensure_ascii=False, indent=2)
+    logger.info(f"Valid symptoms list saved to: {VALID_SYMPTOMS_PATH}")
 
 
 def main() -> None:
-    """
-    CLI entrypoint.
-
-    Usage examples (from project root):
-        python -m backend.app.ml.train_model my_dataset.csv
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train the MediAssist AI symptom model from a CSV dataset.")
-    parser.add_argument(
-        "csv_filename",
-        help="CSV filename located in backend/app/ml/datasets/",
-    )
-    args = parser.parse_args()
-
-    train_from_csv(args.csv_filename)
+    """Main training pipeline."""
+    logger.info("=" * 60)
+    logger.info("MediAssist AI - Symptom Model Training")
+    logger.info("=" * 60)
+    
+    # Load datasets
+    train_path = DATASETS_DIR / "Training.csv"
+    test_path = DATASETS_DIR / "Testing.csv"
+    
+    try:
+        X_train, y_train, symptom_names = load_dataset(train_path)
+        X_test, y_test, _ = load_dataset(test_path)
+        
+        # Ensure test set has same columns as train
+        for col in symptom_names:
+            if col not in X_test.columns:
+                X_test[col] = 0
+        X_test = X_test[symptom_names]
+        
+        # Train model
+        model, accuracy = train_model(
+            X_train, y_train, X_test, y_test,
+            model_type="random_forest"
+        )
+        
+        # Save artifacts
+        save_artifacts(model, symptom_names, accuracy)
+        
+        logger.info("=" * 60)
+        logger.info("Training completed successfully!")
+        logger.info(f"Final accuracy: {accuracy:.4f}")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    # This script is run manually; it is **not** called automatically
-    # from the Flask app. See the README or docstring for usage.
     main()
-

@@ -2,9 +2,9 @@
  * Login page: email + password form. Calls login() from auth.js (POST /api/auth/login),
  * stores token in localStorage, then redirects by role (patient → /patient/dashboard, doctor → /doctor/dashboard).
  */
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { login } from "../services/auth.js";
+import { login, logout } from "../services/auth.js";
 import "./LoginPage.css";
 
 export default function LoginPage() {
@@ -14,6 +14,11 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Clear any stale auth data when visiting login page
+  useEffect(() => {
+    logout();
+  }, []);
 
   const isValidEmail = (value) => {
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

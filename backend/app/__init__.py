@@ -5,6 +5,7 @@ create_app() builds the app: config, DB, JWT, ML model, routes, seed data.
 All API routes are under /api/ (e.g. /api/auth/login, /api/predict).
 """
 from flask import Flask
+from flask_cors import CORS
 
 from backend.config import get_config
 from .extensions import db, migrate, jwt
@@ -13,6 +14,7 @@ from .extensions import db, migrate, jwt
 def create_app():
     """Create and configure the Flask app. Called once when the server starts (see backend/run.py)."""
     app = Flask(__name__)
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
     app.config.from_object(get_config())
 
     _init_extensions(app)   # DB, migrations, JWT + load models
@@ -59,10 +61,12 @@ def _register_blueprints(app: Flask) -> None:
     from .routes.symptoms import symptoms_bp
     from .routes.patient import patient_bp
     from .routes.doctor import doctor_bp
+    from .routes.consultation import consultation_bp
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(symptoms_bp, url_prefix="/api")
     app.register_blueprint(patient_bp, url_prefix="/api/patient")
     app.register_blueprint(doctor_bp, url_prefix="/api/doctor")
+    app.register_blueprint(consultation_bp, url_prefix="/api/consultation")
 
 
 def _ensure_db_tables(app: Flask) -> None:

@@ -35,7 +35,13 @@ def get_user_by_id(user_id: int) -> User | None:
     return User.query.get(user_id)
 
 
-def register_user(name: str, email: str, password: str, role: str = "patient") -> User:
+def register_user(
+    name: str,
+    email: str,
+    password: str,
+    role: str = "patient",
+    specialization: str | None = None,
+) -> User:
     """
     Create User (and PatientProfile if role is patient). Commit to DB.
     Raises ValueError if email already exists or role is not in VALID_ROLES.
@@ -51,6 +57,7 @@ def register_user(name: str, email: str, password: str, role: str = "patient") -
         email=email,
         password_hash=hash_password(password),
         role=role,
+        specialization=(specialization or "").strip() or None,
     )
     db.session.add(user)
     db.session.flush()

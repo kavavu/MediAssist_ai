@@ -22,12 +22,15 @@ export function getCurrentUser() {
 export function setSession(token, user) {
   window.localStorage.setItem(TOKEN_KEY, token);
   window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event("auth-change"));
 }
 
 /** Clear token and user (e.g. when user clicks Logout). */
 export function logout() {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  // Notify all tabs/components that auth state changed
+  window.dispatchEvent(new Event("auth-change"));
 }
 
 /** POST /api/auth/login with email & password. Saves token and user, returns user. */
