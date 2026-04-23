@@ -7,7 +7,7 @@ All API routes are under /api/ (e.g. /api/auth/login, /api/predict).
 from flask import Flask
 from flask_cors import CORS
 
-from backend.config import get_config
+from config import get_config
 from .extensions import db, migrate, jwt
 
 
