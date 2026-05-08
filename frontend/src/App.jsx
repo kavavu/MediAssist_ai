@@ -11,6 +11,8 @@ import SubmitSymptomsPage from "./pages/SubmitSymptomsPage.jsx";
 import LabTestsPage from "./pages/LabTestsPage.jsx";
 import MedicinesPage from "./pages/MedicinesPage.jsx";
 import DoctorDashboard from "./pages/DoctorDashboard.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
+import AppointmentsPage from "./pages/AppointmentsPage.jsx";
 import { getCurrentUser } from "./services/auth.js";
 
 function ProtectedRoute({ roles, children }) {
@@ -80,6 +82,22 @@ export default function App() {
             element={
               <ProtectedRoute roles={["doctor"]}>
                 <DoctorDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/dashboard"
+            element={
+              <ProtectedRoute roles={["admin"]}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/appointments"
+            element={
+              <ProtectedRoute roles={["patient", "doctor"]}>
+                <AppointmentsPage />
               </ProtectedRoute>
             }
           />

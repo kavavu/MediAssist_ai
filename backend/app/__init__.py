@@ -18,6 +18,7 @@ def create_app():
     app.config.from_object(get_config())
 
     _init_extensions(app)   # DB, migrations, JWT + load models
+    _init_socketio(app)     # WebSocket support
     _load_ml_model()        # Load symptom classifier for /api/predict
     _register_blueprints(app)  # Auth, symptoms, patient, doctor routes
     _ensure_db_tables(app)   # Create tables if missing
@@ -62,17 +63,27 @@ def _register_blueprints(app: Flask) -> None:
     from .routes.patient import patient_bp
     from .routes.doctor import doctor_bp
     from .routes.consultation import consultation_bp
+    from .routes.admin import admin_bp
+    from .routes.appointment import appointment_bp
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(symptoms_bp, url_prefix="/api")
     app.register_blueprint(patient_bp, url_prefix="/api/patient")
     app.register_blueprint(doctor_bp, url_prefix="/api/doctor")
     app.register_blueprint(consultation_bp, url_prefix="/api/consultation")
+    app.register_blueprint(appointment_bp, url_prefix="/api/appointments")
+    app.register_blueprint(admin_bp)
 
 
 def _ensure_db_tables(app: Flask) -> None:
     """Create all tables (users, symptom_reports, etc.) if they don't exist yet."""
     with app.app_context():
         db.create_all()
+
+
+def _init_socketio(app: Flask) -> None:
+    """Initialize SocketIO for real-time WebSocket support."""
+    from .sockets import init_socketio
+    init_socketio(app)
 
 
 def _seed_if_empty(app: Flask) -> None:

@@ -46,27 +46,36 @@ def register_user(
     Create User (and PatientProfile if role is patient). Commit to DB.
     Raises ValueError if email already exists or role is not in VALID_ROLES.
     """
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
     email = email.strip().lower()
     if get_user_by_email(email):
         raise ValueError("Email already registered")
     if role not in VALID_ROLES:
         raise ValueError("Invalid role")
 
-    user = User(
-        name=name.strip(),
-        email=email,
-        password_hash=hash_password(password),
-        role=role,
-        specialization=(specialization or "").strip() or None,
-    )
-    db.session.add(user)
-    db.session.flush()
-    if role == "patient":
-        profile = PatientProfile(user_id=user.id)
-        db.session.add(profile)
-    db.session.commit()
-    db.session.refresh(user)
-    return user
+    try:
+        user = User(
+            name=name.strip(),
+            email=email,
+            password_hash=hash_password(password),
+            role=role,
+            specialization=(specialization or "").strip() or None,
+        )
+        db.session.add(user)
+        db.session.flush()
+        if role == "patient":
+            profile = PatientProfile(user_id=user.id)
+            db.session.add(profile)
+        db.session.commit()
+        db.session.refresh(user)
+        return user
+    except IntegrityError:
+        db.session.rollback()
+        raise ValueError("Email already registered")
+    except SQLAlchemyError:
+        db.session.rollback()
+        raise
 
 
 def authenticate_user(email: str, password: str) -> User | None:

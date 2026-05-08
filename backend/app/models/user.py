@@ -19,10 +19,13 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(32), nullable=False, default="patient")  # patient | doctor | admin
     specialization = db.Column(db.String(128), nullable=True)
+    is_available = db.Column(db.Boolean, default=True)
+    current_load = db.Column(db.Integer, default=0)
+    is_verified = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationships
-    patient_profile = db.relationship("PatientProfile", back_populates="user", uselist=False)
+    patient_profile = db.relationship("PatientProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     symptom_reports = db.relationship("SymptomReport", back_populates="user", foreign_keys="SymptomReport.user_id")
     orders = db.relationship("Order", back_populates="user", foreign_keys="Order.user_id")
     appointments_as_patient = db.relationship(

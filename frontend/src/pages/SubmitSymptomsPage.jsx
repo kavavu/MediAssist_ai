@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api.js";
-import { createConsultation, getDoctorsPreview } from "../services/consultation.js";
+import { createConsultation, getDoctorsPreview, getRecommendedDoctor, getDoctorPublicStats } from "../services/consultation.js";
 
 export default function SubmitSymptomsPage() {
   const navigate = useNavigate();
@@ -23,6 +23,9 @@ export default function SubmitSymptomsPage() {
   const [doctors, setDoctors] = useState([]);
   const [selectedDoctorId, setSelectedDoctorId] = useState(null);
   const [showDoctorSelect, setShowDoctorSelect] = useState(false);
+  const [recommendedDoctor, setRecommendedDoctor] = useState(null);
+  const [doctorStats, setDoctorStats] = useState({});
+  const [showStatsFor, setShowStatsFor] = useState(null);
 
   useEffect(() => {
     getDoctorsPreview()
@@ -36,18 +39,49 @@ export default function SubmitSymptomsPage() {
     setResult(null);
     setConsultSuccess("");
     setShowDoctorSelect(false);
+    setRecommendedDoctor(null);
+    setDoctorStats({});
+    setShowStatsFor(null);
     setLoading(true);
     try {
       const res = await api.post("/predict", { symptoms_text: symptoms });
       setResult(res.data);
-      // Auto-select the first doctor as default
-      if (doctors.length > 0) {
-        setSelectedDoctorId(doctors[0].id);
+      const topCondition = res.data.predictions?.[0]?.condition || "";
+      
+      // Fetch smart recommendation based on top condition
+      try {
+        const recRes = await getRecommendedDoctor(topCondition);
+        setRecommendedDoctor(recRes.data.recommendation);
+        if (recRes.data.recommendation?.doctor?.id) {
+          setSelectedDoctorId(recRes.data.recommendation.doctor.id);
+        }
+      } catch {
+        // Fallback: auto-select the least-loaded available doctor
+        if (doctors.length > 0) {
+          const sorted = [...doctors].sort((a, b) => (a.current_load || 0) - (b.current_load || 0));
+          setSelectedDoctorId(sorted[0].id);
+        }
       }
     } catch (err) {
       setError(err.response?.data?.message || "Prediction failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleShowStats = async (doctorId) => {
+    if (showStatsFor === doctorId) {
+      setShowStatsFor(null);
+      return;
+    }
+    setShowStatsFor(doctorId);
+    if (!doctorStats[doctorId]) {
+      try {
+        const res = await getDoctorPublicStats(doctorId);
+        setDoctorStats((prev) => ({ ...prev, [doctorId]: res.data.stats }));
+      } catch {
+        // silently fail
+      }
     }
   };
 
@@ -218,6 +252,24 @@ export default function SubmitSymptomsPage() {
           {predictions.length > 0 && (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
               <h2 className="text-lg font-bold text-slate-800 mb-4">Choose a Doctor</h2>
+
+              {/* Smart Recommendation Banner */}
+              {recommendedDoctor && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 mb-4">
+                  <div className="flex items-start gap-2">
+                    <span className="text-emerald-600 text-sm mt-0.5">🎯</span>
+                    <div>
+                      <p className="text-sm font-semibold text-emerald-800">
+                        Recommended: Dr. {recommendedDoctor.doctor.name} ({recommendedDoctor.doctor.specialization})
+                      </p>
+                      <p className="text-xs text-emerald-600 mt-0.5">
+                        {recommendedDoctor.reason} | Active Patients: {recommendedDoctor.doctor.current_load}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <p className="text-sm text-slate-500 mb-4">
                 Based on your symptoms, we recommend selecting a doctor below. The system will auto-assign the best match if you don't choose.
               </p>
@@ -228,30 +280,98 @@ export default function SubmitSymptomsPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-                  {doctors.map((doc) => (
-                    <button
-                      key={doc.id}
-                      onClick={() => setSelectedDoctorId(doc.id)}
-                      className={`text-left p-4 rounded-xl border transition-all ${
-                        selectedDoctorId === doc.id
-                          ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-sm font-bold">
-                          {doc.name?.charAt(0) || "D"}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-800">Dr. {doc.name}</p>
-                          <p className="text-xs text-slate-500">{doc.specialization}</p>
-                        </div>
-                        {selectedDoctorId === doc.id && (
-                          <span className="ml-auto text-primary-600 text-lg">✓</span>
+                  {/* Sort doctors by least load for fair display */}
+                  {[...doctors].sort((a, b) => (a.current_load || 0) - (b.current_load || 0)).map((doc) => {
+                    const isRecommended = recommendedDoctor?.doctor?.id === doc.id;
+                    const stats = doctorStats[doc.id];
+                    const isStatsOpen = showStatsFor === doc.id;
+                    return (
+                      <div key={doc.id} className="space-y-2">
+                        <button
+                          onClick={() => setSelectedDoctorId(doc.id)}
+                          className={`w-full text-left p-4 rounded-xl border transition-all ${
+                            selectedDoctorId === doc.id
+                              ? "border-primary-500 bg-primary-50 ring-1 ring-primary-500"
+                              : isRecommended
+                              ? "border-emerald-300 bg-emerald-50/30 hover:bg-emerald-50/50"
+                              : "border-slate-200 bg-white hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${
+                              isRecommended ? "bg-emerald-100 text-emerald-700" : "bg-primary-100 text-primary-700"
+                            }`}>
+                              {doc.name?.charAt(0) || "D"}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-semibold text-slate-800">Dr. {doc.name}</p>
+                                {isRecommended && (
+                                  <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200 font-medium">
+                                    🎯 Recommended
+                                  </span>
+                                )}
+                                {doc.is_verified ? (
+                                  <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
+                                    ✅ Verified
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100 font-medium">
+                                    ⏳ Pending
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500">{doc.specialization}</p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className={doc.is_available ? "text-green-500 text-xs" : "text-red-500 text-xs"}>
+                                  {doc.is_available ? "🟢 Available" : "🔴 Busy"}
+                                </span>
+                                <span className="text-xs text-slate-400">| Active Patients: {doc.current_load}</span>
+                              </div>
+                            </div>
+                            {selectedDoctorId === doc.id && (
+                              <span className="ml-auto text-primary-600 text-lg">✓</span>
+                            )}
+                          </div>
+                        </button>
+                        {/* Stats toggle button */}
+                        <button
+                          onClick={() => handleShowStats(doc.id)}
+                          className="w-full text-center text-xs text-slate-500 hover:text-primary-600 py-1 transition-colors"
+                        >
+                          {isStatsOpen ? "▲ Hide Stats" : "▼ View Stats & Experience"}
+                        </button>
+                        {/* Expanded stats */}
+                        {isStatsOpen && stats && (
+                          <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-xs space-y-1.5">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Total Consultations:</span>
+                              <span className="font-semibold text-slate-700">{stats.total_consultations}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Cases Resolved:</span>
+                              <span className="font-semibold text-emerald-600">{stats.total_resolved}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Avg Response Time:</span>
+                              <span className="font-semibold text-slate-700">
+                                {stats.average_response_minutes < 1 ? "< 1 min" : `${stats.average_response_minutes} min`}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Patients (Last 7 Days):</span>
+                              <span className="font-semibold text-slate-700">{stats.recent_patients_7d}</span>
+                            </div>
+                          </div>
+                        )}
+                        {isStatsOpen && !stats && (
+                          <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-center">
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 inline-block" />
+                          </div>
                         )}
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 

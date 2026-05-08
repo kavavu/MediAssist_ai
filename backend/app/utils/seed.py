@@ -76,4 +76,7 @@ def _seed_doctors():
             password_hash=hash_password("doctor123"),
             role="doctor",
             specialization=specialization,
+            is_available=True,
+            current_load=0,
+            is_verified=True,
         ))

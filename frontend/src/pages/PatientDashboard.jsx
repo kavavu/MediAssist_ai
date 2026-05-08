@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import api from "../services/api.js";
 import { getPatientConsultations, getConsultationHistory, sendFollowUp } from "../services/consultation.js";
+import { getSocket, joinConsultationRoom, leaveConsultationRoom } from "../services/socket.js";
 
 /* ------------------------------------------------------------------ */
 /* Helper Components                                                  */
@@ -48,7 +49,7 @@ const InfoBox = ({ children, className = "" }) => (
   </div>
 );
 
-const DoctorBadge = ({ name, specialization }) => (
+const DoctorBadge = ({ name, specialization, isAvailable, currentLoad, isVerified }) => (
   <div className="flex items-center gap-2 mt-1">
     <div className="w-5 h-5 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-[10px] font-bold">
       {name?.charAt(0) || "D"}
@@ -57,9 +58,23 @@ const DoctorBadge = ({ name, specialization }) => (
       <span className="font-semibold">Dr. {name}</span>
       <span className="text-slate-400"> ({specialization || "General Practitioner"})</span>
     </p>
-    <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
-      Verified
-    </span>
+    {typeof isAvailable !== "undefined" && (
+      <span className={isAvailable ? "text-[10px] text-green-600" : "text-[10px] text-red-600"}>
+        {isAvailable ? "🟢" : "🔴"}
+      </span>
+    )}
+    {typeof currentLoad !== "undefined" && (
+      <span className="text-[10px] text-slate-400">Load: {currentLoad}</span>
+    )}
+    {isVerified ? (
+      <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
+        ✅ Verified
+      </span>
+    ) : (
+      <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100 font-medium">
+        ⏳ Pending Verification
+      </span>
+    )}
   </div>
 );
 
@@ -67,11 +82,22 @@ const DoctorBadge = ({ name, specialization }) => (
 /* Chat Modal                                                         */
 /* ------------------------------------------------------------------ */
 
+const PATIENT_QUICK_REPLIES = [
+  "Thank you, doctor.",
+  "My symptoms have improved.",
+  "I'm feeling worse.",
+  "I have a question about my medication.",
+  "When should I follow up?",
+];
+
 const ChatModal = ({ consultation, onClose }) => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const messagesEndRef = useRef(null);
+  const socketRef = useRef(null);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -86,6 +112,7 @@ const ChatModal = ({ consultation, onClose }) => {
           senderName: h.data.sender_name,
           text: h.data.message,
           timestamp: h.timestamp_relative,
+          fullTimestamp: h.timestamp,
         }));
       setMessages(chatMessages);
     } catch (err) {
@@ -97,25 +124,84 @@ const ChatModal = ({ consultation, onClose }) => {
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 5000);
-    return () => clearInterval(interval);
-  }, [fetchHistory]);
 
-  const handleSend = async () => {
-    if (!newMessage.trim()) return;
+    // Join consultation room for real-time messages
+    joinConsultationRoom(consultation.id);
+
+    // Set up socket listener for new messages
+    const socket = getSocket();
+    socketRef.current = socket;
+
+    const handleNewMessage = (data) => {
+      try {
+        if (!data || !data.message) return;
+        if (data.consultation_id !== consultation.id) return;
+
+        const msg = data.message;
+        // Validate required fields
+        if (!msg.id || !msg.sender_role || !msg.message) return;
+
+        setMessages((prev) => {
+          // Prevent duplicates: check by unique message id
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: msg.id,
+              sender: msg.sender_role,
+              senderName: msg.sender_name || "Unknown",
+              text: msg.message,
+              timestamp: "just now",
+              fullTimestamp: msg.created_at || new Date().toISOString(),
+            },
+          ];
+        });
+      } catch (err) {
+        console.error("[Socket] Error handling new_message:", err);
+      }
+    };
+
+    socket.on("new_message", handleNewMessage);
+
+    return () => {
+      try {
+        socket.off("new_message", handleNewMessage);
+        leaveConsultationRoom(consultation.id);
+      } catch (err) {
+        console.error("[Socket] Error cleaning up chat listeners:", err);
+      }
+    };
+  }, [fetchHistory, consultation.id]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSend = async (text) => {
+    const messageToSend = text || newMessage;
+    if (!messageToSend.trim()) return;
     setSending(true);
     try {
       await sendFollowUp(consultation.id, {
-        message: newMessage.trim(),
+        message: messageToSend.trim(),
         sender_role: "patient",
       });
       setNewMessage("");
-      await fetchHistory();
+      setShowQuickReplies(false);
+      // Don't fetch history — the socket will push the new message
     } catch (err) {
       alert(err.response?.data?.error || "Failed to send message");
     } finally {
       setSending(false);
     }
+  };
+
+  const formatFullTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
   };
 
   return (
@@ -147,29 +233,69 @@ const ChatModal = ({ consultation, onClose }) => {
 
           {messages.map((msg, idx) => {
             const isPatient = msg.sender === "patient";
+            const showDate = idx === 0 || (
+              messages[idx - 1] &&
+              new Date(msg.fullTimestamp).toDateString() !== new Date(messages[idx - 1].fullTimestamp).toDateString()
+            );
             return (
-              <div key={idx} className={`flex ${isPatient ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
-                    isPatient
-                      ? "bg-primary-600 text-white rounded-br-none"
-                      : "bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-none"
-                  }`}
-                >
-                  <p className="text-[10px] opacity-70 mb-0.5">{msg.senderName}</p>
-                  <p>{msg.text}</p>
-                  <p className={`text-[10px] mt-1 ${isPatient ? "text-primary-200" : "text-slate-400"}`}>
-                    {msg.timestamp}
-                  </p>
+              <div key={idx}>
+                {showDate && (
+                  <div className="flex justify-center my-2">
+                    <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+                      {formatFullTime(msg.fullTimestamp).split(",")[0]}
+                    </span>
+                  </div>
+                )}
+                <div className={`flex ${isPatient ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
+                      isPatient
+                        ? "bg-primary-600 text-white rounded-br-none"
+                        : "bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-none"
+                    }`}
+                  >
+                    <p className="text-[10px] opacity-70 mb-0.5">{msg.senderName}</p>
+                    <p>{msg.text}</p>
+                    <p className={`text-[10px] mt-1 ${isPatient ? "text-primary-200" : "text-slate-400"}`}>
+                      {formatFullTime(msg.fullTimestamp)}
+                    </p>
+                  </div>
                 </div>
               </div>
             );
           })}
+          <div ref={messagesEndRef} />
         </div>
+
+        {/* Quick Replies */}
+        {showQuickReplies && (
+          <div className="border-t border-slate-100 px-4 py-2.5 bg-slate-50">
+            <p className="text-[10px] text-slate-500 mb-1.5 font-medium uppercase tracking-wide">Quick Replies</p>
+            <div className="flex flex-wrap gap-1.5">
+              {PATIENT_QUICK_REPLIES.map((reply) => (
+                <button
+                  key={reply}
+                  onClick={() => handleSend(reply)}
+                  disabled={sending}
+                  className="text-[11px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-full hover:bg-primary-50 hover:border-primary-200 hover:text-primary-700 transition-colors"
+                >
+                  {reply}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Input */}
         <div className="border-t border-slate-100 p-3">
           <div className="flex gap-2">
+            <button
+              onClick={() => setShowQuickReplies(!showQuickReplies)}
+              className="px-2 text-slate-400 hover:text-primary-600 transition-colors"
+              title="Quick replies"
+            >
+              ⚡
+            </button>
             <input
               type="text"
               value={newMessage}
@@ -179,7 +305,7 @@ const ChatModal = ({ consultation, onClose }) => {
               className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={sending || !newMessage.trim()}
               className="px-4 bg-primary-600 text-white text-sm font-semibold rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
             >
@@ -260,6 +386,7 @@ export default function PatientDashboard() {
   const [history, setHistory] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [chatConsultation, setChatConsultation] = useState(null);
+  const socketRef = useRef(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -278,8 +405,34 @@ export default function PatientDashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 15000);
-    return () => clearInterval(interval);
+
+    // Set up socket listeners for real-time updates
+    const socket = getSocket();
+    socketRef.current = socket;
+
+    const handleConsultationUpdated = (data) => {
+      try {
+        if (!data || !data.consultation_id || !data.data) return;
+
+        setConsultations((prev) =>
+          prev.map((c) =>
+            c.id === data.consultation_id ? { ...c, ...data.data } : c
+          )
+        );
+      } catch (err) {
+        console.error("[Socket] Error handling consultation_updated:", err);
+      }
+    };
+
+    socket.on("consultation_updated", handleConsultationUpdated);
+
+    return () => {
+      try {
+        socket.off("consultation_updated", handleConsultationUpdated);
+      } catch (err) {
+        console.error("[Socket] Error cleaning up dashboard listeners:", err);
+      }
+    };
   }, [fetchData]);
 
   const getCardTint = (priority) => {
@@ -390,7 +543,7 @@ export default function PatientDashboard() {
                               <SymptomChip key={i} label={s} />
                             ))}
                         </div>
-                        <DoctorBadge name={c.doctor_name} specialization={c.doctor_specialization} />
+                        <DoctorBadge name={c.doctor_name} specialization={c.doctor_specialization} isAvailable={c.doctor_is_available} currentLoad={c.doctor_current_load} isVerified={c.doctor_is_verified} />
                       </div>
                       <span className="text-slate-400 text-lg">{isExpanded ? "▲" : "▼"}</span>
                     </button>

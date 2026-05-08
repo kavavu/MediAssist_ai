@@ -7,6 +7,7 @@ Authentication API: register and login.
 from flask import Blueprint, request, jsonify
 
 from flask_jwt_extended import create_access_token
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..services.auth_service import register_user, authenticate_user
 
@@ -15,13 +16,18 @@ auth_bp = Blueprint("auth", __name__)
 
 def _user_payload(user):
     """Strip password; return only id, name, email, role, specialization for JSON responses."""
-    return {
+    payload = {
         "id": user.id,
         "name": user.name,
         "email": user.email,
         "role": user.role,
         "specialization": user.specialization,
     }
+    if user.role == "doctor":
+        payload["is_available"] = user.is_available
+        payload["current_load"] = user.current_load
+        payload["is_verified"] = user.is_verified
+    return payload
 
 
 @auth_bp.post("/register")
@@ -42,6 +48,8 @@ def register():
         return jsonify({"message": "Registration successful", "user": _user_payload(user)}), 201
     except ValueError as e:
         return jsonify({"message": str(e)}), 400
+    except SQLAlchemyError as e:
+        return jsonify({"message": "Database error. Please try again."}), 500
 
 
 @auth_bp.post("/login")

@@ -153,12 +153,20 @@ export default function NavBar() {
                   <Link to="/patient/medicines" style={linkBaseStyle}>
                     Medicines
                   </Link>
+                  <Link to="/appointments" style={linkBaseStyle}>
+                    Appointments
+                  </Link>
                 </>
               )}
               {user.role === "doctor" && (
-                <Link to="/doctor/dashboard" style={linkBaseStyle}>
-                  Doctor Dashboard
-                </Link>
+                <>
+                  <Link to="/doctor/dashboard" style={linkBaseStyle}>
+                    Doctor Dashboard
+                  </Link>
+                  <Link to="/appointments" style={linkBaseStyle}>
+                    Appointments
+                  </Link>
+                </>
               )}
             </div>
           )}

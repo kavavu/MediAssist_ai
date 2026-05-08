@@ -9,6 +9,7 @@ import {
   getAiResponse,
   getConsultationHistory,
 } from "../services/consultation.js";
+import { getSocket, joinConsultationRoom, leaveConsultationRoom, joinDoctorRoom } from "../services/socket.js";
 
 /* ------------------------------------------------------------------ */
 /* Helper Components                                                  */
@@ -63,7 +64,7 @@ const InfoBox = ({ children, className = "" }) => (
   </div>
 );
 
-const DoctorBadge = ({ name, specialization }) => (
+const DoctorBadge = ({ name, specialization, isAvailable, currentLoad, isVerified }) => (
   <div className="flex items-center gap-2">
     <div className="w-6 h-6 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-xs font-bold">
       {name?.charAt(0) || "D"}
@@ -72,9 +73,23 @@ const DoctorBadge = ({ name, specialization }) => (
       <p className="text-xs font-semibold text-slate-700">Dr. {name}</p>
       <p className="text-[10px] text-slate-500">{specialization || "General Practitioner"}</p>
     </div>
-    <span className="ml-1 text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
-      Verified
-    </span>
+    {typeof isAvailable !== "undefined" && (
+      <span className={isAvailable ? "text-[10px] text-green-600" : "text-[10px] text-red-600"}>
+        {isAvailable ? "🟢" : "🔴"}
+      </span>
+    )}
+    {typeof currentLoad !== "undefined" && (
+      <span className="text-[10px] text-slate-400">Load: {currentLoad}</span>
+    )}
+    {isVerified ? (
+      <span className="ml-1 text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
+        ✅ Verified
+      </span>
+    ) : (
+      <span className="ml-1 text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100 font-medium">
+        ⏳ Pending Verification
+      </span>
+    )}
   </div>
 );
 
@@ -99,12 +114,23 @@ const Toast = ({ message, onClose }) => {
 /* Chat Panel (inline in right panel)                                 */
 /* ------------------------------------------------------------------ */
 
+const QUICK_REPLIES = [
+  "Thank you for the update.",
+  "Please take your medication as prescribed.",
+  "Let me know if symptoms worsen.",
+  "Schedule a follow-up in 3 days.",
+  "Rest and stay hydrated.",
+];
+
 const ChatPanel = ({ consultation }) => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
   const bottomRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const socketRef = useRef(null);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -118,6 +144,7 @@ const ChatPanel = ({ consultation }) => {
           senderName: h.data.sender_name,
           text: h.data.message,
           timestamp: h.timestamp_relative,
+          fullTimestamp: h.timestamp,
         }));
       setMessages(chatMessages);
     } catch (err) {
@@ -129,29 +156,84 @@ const ChatPanel = ({ consultation }) => {
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 5000);
-    return () => clearInterval(interval);
-  }, [fetchHistory]);
+
+    // Join consultation room for real-time messages
+    joinConsultationRoom(consultation.id);
+
+    // Set up socket listener for new messages
+    const socket = getSocket();
+    socketRef.current = socket;
+
+    const handleNewMessage = (data) => {
+      try {
+        if (!data || !data.message) return;
+        if (data.consultation_id !== consultation.id) return;
+
+        const msg = data.message;
+        // Validate required fields
+        if (!msg.id || !msg.sender_role || !msg.message) return;
+
+        setMessages((prev) => {
+          // Prevent duplicates: check by unique message id
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: msg.id,
+              sender: msg.sender_role,
+              senderName: msg.sender_name || "Unknown",
+              text: msg.message,
+              timestamp: "just now",
+              fullTimestamp: msg.created_at || new Date().toISOString(),
+            },
+          ];
+        });
+      } catch (err) {
+        console.error("[Socket] Error handling new_message:", err);
+      }
+    };
+
+    socket.on("new_message", handleNewMessage);
+
+    return () => {
+      try {
+        socket.off("new_message", handleNewMessage);
+        leaveConsultationRoom(consultation.id);
+      } catch (err) {
+        console.error("[Socket] Error cleaning up chat listeners:", err);
+      }
+    };
+  }, [fetchHistory, consultation.id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = async () => {
-    if (!newMessage.trim()) return;
+  const handleSend = async (text) => {
+    const messageToSend = text || newMessage;
+    if (!messageToSend.trim()) return;
     setSending(true);
     try {
       await sendFollowUp(consultation.id, {
-        message: newMessage.trim(),
+        message: messageToSend.trim(),
         sender_role: "doctor",
       });
       setNewMessage("");
-      await fetchHistory();
+      setShowQuickReplies(false);
+      // Don't fetch history — the socket will push the new message
     } catch (err) {
       alert(err.response?.data?.error || "Failed to send message");
     } finally {
       setSending(false);
     }
+  };
+
+  const formatFullTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
   };
 
   return (
@@ -161,7 +243,7 @@ const ChatPanel = ({ consultation }) => {
         <h4 className="text-sm font-bold text-slate-700">Chat with Patient</h4>
         <span className="text-xs text-slate-400 ml-auto">Auto-refreshing</span>
       </div>
-      <div className="h-48 overflow-y-auto p-3 space-y-2">
+      <div className="h-56 overflow-y-auto p-3 space-y-2">
         {loading && (
           <div className="flex items-center justify-center py-4">
             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
@@ -172,25 +254,68 @@ const ChatPanel = ({ consultation }) => {
         )}
         {messages.map((msg, idx) => {
           const isDoctor = msg.sender === "doctor";
+          const showDate = idx === 0 || (
+            messages[idx - 1] &&
+            new Date(msg.fullTimestamp).toDateString() !== new Date(messages[idx - 1].fullTimestamp).toDateString()
+          );
           return (
-            <div key={idx} className={`flex ${isDoctor ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[85%] rounded-lg px-3 py-1.5 text-xs ${
-                  isDoctor
-                    ? "bg-primary-600 text-white rounded-br-none"
-                    : "bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-none"
-                }`}
-              >
-                <p className="text-[10px] opacity-70 mb-0.5">{msg.senderName}</p>
-                <p>{msg.text}</p>
-                <p className={`text-[9px] mt-0.5 ${isDoctor ? "text-primary-200" : "text-slate-400"}`}>{msg.timestamp}</p>
+            <div key={idx}>
+              {showDate && (
+                <div className="flex justify-center my-2">
+                  <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+                    {formatFullTime(msg.fullTimestamp).split(",")[0]}
+                  </span>
+                </div>
+              )}
+              <div className={`flex ${isDoctor ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[85%] rounded-lg px-3 py-1.5 text-xs ${
+                    isDoctor
+                      ? "bg-primary-600 text-white rounded-br-none"
+                      : "bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-none"
+                  }`}
+                >
+                  <p className="text-[10px] opacity-70 mb-0.5">{msg.senderName}</p>
+                  <p>{msg.text}</p>
+                  <p className={`text-[9px] mt-0.5 ${isDoctor ? "text-primary-200" : "text-slate-400"}`}>
+                    {formatFullTime(msg.fullTimestamp)}
+                  </p>
+                </div>
               </div>
             </div>
           );
         })}
+        <div ref={messagesEndRef} />
         <div ref={bottomRef} />
       </div>
+
+      {/* Quick Replies */}
+      {showQuickReplies && (
+        <div className="border-t border-slate-100 px-3 py-2 bg-slate-50">
+          <p className="text-[10px] text-slate-500 mb-1.5 font-medium uppercase tracking-wide">Quick Replies</p>
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_REPLIES.map((reply) => (
+              <button
+                key={reply}
+                onClick={() => handleSend(reply)}
+                disabled={sending}
+                className="text-[11px] bg-white border border-slate-200 text-slate-600 px-2.5 py-1 rounded-full hover:bg-primary-50 hover:border-primary-200 hover:text-primary-700 transition-colors"
+              >
+                {reply}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="border-t border-slate-100 p-2 flex gap-2">
+        <button
+          onClick={() => setShowQuickReplies(!showQuickReplies)}
+          className="px-2 text-slate-400 hover:text-primary-600 transition-colors"
+          title="Quick replies"
+        >
+          ⚡
+        </button>
         <input
           type="text"
           value={newMessage}
@@ -200,7 +325,7 @@ const ChatPanel = ({ consultation }) => {
           className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
         />
         <button
-          onClick={handleSend}
+          onClick={() => handleSend()}
           disabled={sending || !newMessage.trim()}
           className="px-3 bg-primary-600 text-white text-xs font-semibold rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
         >
@@ -300,6 +425,7 @@ export default function DoctorDashboard() {
   const [showChat, setShowChat] = useState(false);
 
   const prevCountRef = useRef(0);
+  const socketRef = useRef(null);
 
   const selected = consultations.find((c) => c.id === selectedId);
 
@@ -334,11 +460,77 @@ export default function DoctorDashboard() {
     fetchData();
   }, [fetchData]);
 
-  /* Polling every 12 seconds */
+  /* Real-time socket listeners (replaces polling) */
   useEffect(() => {
-    const interval = setInterval(() => fetchData(true), 12000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    const socket = getSocket();
+    socketRef.current = socket;
+
+    // Get current user from localStorage to join doctor room
+    const userStr = window.localStorage.getItem("user");
+    let doctorId = null;
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        if (user.role === "doctor") {
+          doctorId = user.id;
+          joinDoctorRoom(user.id);
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    const handleNewConsultation = (data) => {
+      try {
+        if (!data || !data.consultation) return;
+        const newConsultation = data.consultation;
+        // Validate required fields
+        if (!newConsultation.id) return;
+
+        setConsultations((prev) => {
+          // Prevent duplicates: check by unique consultation id
+          if (prev.some((c) => c.id === newConsultation.id)) return prev;
+          const updated = [newConsultation, ...prev];
+          // Show toast notification
+          const diff = updated.length - prev.length;
+          if (diff > 0) {
+            setToast(`${diff} new patient case${diff > 1 ? "s" : ""} received`);
+            setNewCount(diff);
+            setTimeout(() => setNewCount(0), 5000);
+          }
+          return updated;
+        });
+      } catch (err) {
+        console.error("[Socket] Error handling new_consultation:", err);
+      }
+    };
+
+    const handleConsultationUpdated = (data) => {
+      try {
+        if (!data || !data.consultation_id || !data.data) return;
+
+        setConsultations((prev) =>
+          prev.map((c) =>
+            c.id === data.consultation_id ? { ...c, ...data.data } : c
+          )
+        );
+      } catch (err) {
+        console.error("[Socket] Error handling consultation_updated:", err);
+      }
+    };
+
+    socket.on("new_consultation", handleNewConsultation);
+    socket.on("consultation_updated", handleConsultationUpdated);
+
+    return () => {
+      try {
+        socket.off("new_consultation", handleNewConsultation);
+        socket.off("consultation_updated", handleConsultationUpdated);
+      } catch (err) {
+        console.error("[Socket] Error cleaning up dashboard listeners:", err);
+      }
+    };
+  }, []);
 
   /* Filter + Search */
   useEffect(() => {
@@ -443,7 +635,9 @@ export default function DoctorDashboard() {
         setUrgency(s.urgency);
       }
     } catch (err) {
-      alert("AI assist failed");
+      console.error("AI assist error:", err);
+      const msg = err.response?.data?.error || err.message || "AI assist failed";
+      alert(msg);
     }
   };
 
@@ -607,7 +801,7 @@ export default function DoctorDashboard() {
                 </div>
                 <div className="flex items-center gap-4 text-xs text-slate-500">
                   <span>📅 {formatTimestamp(selected.created_at)}</span>
-                  <DoctorBadge name={selected.doctor_name} specialization={selected.doctor_specialization} />
+                  <DoctorBadge name={selected.doctor_name} specialization={selected.doctor_specialization} isAvailable={selected.doctor_is_available} currentLoad={selected.doctor_current_load} isVerified={selected.doctor_is_verified} />
                 </div>
 
                 {/* CONDITION BLOCK */}
