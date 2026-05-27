@@ -16,6 +16,7 @@ Endpoints:
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_current_user
 
+from ..extensions import db
 from ..utils.decorators import role_required
 from ..utils.time_format import format_time_ago
 from ..services import consultation_service
@@ -70,6 +71,7 @@ def create_consultation():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
+        db.session.rollback()
         return jsonify({"error": f"Failed to create consultation: {str(e)}"}), 500
 
 
@@ -177,6 +179,26 @@ def get_ai_response(consultation_id):
         return jsonify({"error": f"Failed to generate: {str(e)}"}), 500
 
 
+@consultation_bp.route("/ai-response/<int:consultation_id>/full", methods=["GET"])
+@jwt_required()
+@role_required("doctor")
+def get_ai_full_response(consultation_id):
+    """Generate a complete, human-like AI-assisted doctor response."""
+    user = get_current_user()
+    try:
+        result = consultation_service.generate_ai_full_response(consultation_id, user.id)
+        return jsonify({
+            "success": True,
+            "response": result["full_response"],
+            "source": result["source"],
+            "structured": result["structured"],
+        }), 200
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate: {str(e)}"}), 500
+
+
 @consultation_bp.route("/respond/<int:consultation_id>/edit", methods=["POST"])
 @jwt_required()
 @role_required("doctor")
@@ -216,11 +238,15 @@ def edit_response(consultation_id):
 
 @consultation_bp.route("/followup/<int:consultation_id>", methods=["POST"])
 @jwt_required()
+@role_required("patient", "doctor")
 def send_followup(consultation_id):
     user = get_current_user()
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
     sender_role = data.get("sender_role") or user.role
+    # Prevent role forgery: sender_role must match the authenticated user's role
+    if sender_role != user.role:
+        return jsonify({"error": "Sender role does not match your account role."}), 403
     if not message:
         return jsonify({"error": "Follow-up message is required."}), 400
     if sender_role not in ("doctor", "patient"):

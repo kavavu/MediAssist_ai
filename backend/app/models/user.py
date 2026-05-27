@@ -43,6 +43,15 @@ class User(db.Model):
     followups = db.relationship(
         "FollowUp", back_populates="sender", foreign_keys="FollowUp.sender_id"
     )
+    payments = db.relationship(
+        "Payment", back_populates="user", foreign_keys="Payment.user_id", cascade="all, delete-orphan"
+    )
+    reviews_given = db.relationship(
+        "Review", back_populates="patient", foreign_keys="Review.patient_id", cascade="all, delete-orphan"
+    )
+    reviews_received = db.relationship(
+        "Review", back_populates="doctor", foreign_keys="Review.doctor_id", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<User {self.email}>"

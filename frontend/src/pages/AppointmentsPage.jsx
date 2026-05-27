@@ -7,7 +7,8 @@ import {
   getDoctorAppointments,
   cancelAppointment,
 } from "../services/appointment.js";
-import api from "../services/api.js";
+import { getDoctorsPreview } from "../services/consultation.js";
+import PaymentModal from "../components/PaymentModal.jsx";
 
 /* ------------------------------------------------------------------ */
 /* Helper Components                                                  */
@@ -46,6 +47,8 @@ const Alert = ({ type, message, onClose }) => {
   );
 };
 
+
+
 /* ------------------------------------------------------------------ */
 /* Patient Booking Section                                            */
 /* ------------------------------------------------------------------ */
@@ -64,7 +67,7 @@ const PatientBooking = ({ onBooked }) => {
 
   const fetchDoctors = useCallback(async () => {
     try {
-      const res = await api.get("/consultation/doctors/preview");
+      const res = await getDoctorsPreview();
       setDoctors(res.data.doctors || []);
     } catch (err) {
       setAlert({ type: "error", message: "Failed to load doctors." });
@@ -226,7 +229,7 @@ const PatientBooking = ({ onBooked }) => {
 /* Appointment List                                                   */
 /* ------------------------------------------------------------------ */
 
-const AppointmentList = ({ appointments, loading, onCancel, role }) => {
+const AppointmentList = ({ appointments, loading, onCancel, role, onPay }) => {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -283,14 +286,24 @@ const AppointmentList = ({ appointments, loading, onCancel, role }) => {
               <p className="text-xs text-slate-500 mt-1 italic">Notes: {appt.notes}</p>
             )}
           </div>
-          {appt.status === "scheduled" && (
-            <button
-              onClick={() => onCancel(appt.id)}
-              className="px-3 py-1.5 bg-white border border-red-200 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-50 transition-colors"
-            >
-              Cancel
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {role === "patient" && appt.status === "scheduled" && (
+              <button
+                onClick={() => onPay(appt)}
+                className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition-colors"
+              >
+                Pay Now
+              </button>
+            )}
+            {appt.status === "scheduled" && (
+              <button
+                onClick={() => onCancel(appt.id)}
+                className="px-3 py-1.5 bg-white border border-red-200 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-50 transition-colors"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -308,6 +321,7 @@ export default function AppointmentsPage() {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [alert, setAlert] = useState(null);
+  const [payAppt, setPayAppt] = useState(null);
 
   const fetchAppointments = useCallback(async () => {
     setLoading(true);
@@ -341,6 +355,10 @@ export default function AppointmentsPage() {
     }
   };
 
+  const handlePay = (appt) => {
+    setPayAppt(appt);
+  };
+
   return (
     <div className="max-w-5xl mx-auto px-6 py-6">
       <div className="mb-6">
@@ -357,7 +375,29 @@ export default function AppointmentsPage() {
       {role === "patient" && <PatientBooking onBooked={fetchAppointments} />}
 
       <SectionTitle>{role === "patient" ? "My Appointments" : "Upcoming Appointments"}</SectionTitle>
-      <AppointmentList appointments={appointments} loading={loading} onCancel={handleCancel} role={role} />
+      <AppointmentList
+        appointments={appointments}
+        loading={loading}
+        onCancel={handleCancel}
+        onPay={handlePay}
+        role={role}
+      />
+
+      {payAppt && (
+        <PaymentModal
+          amount={500}
+          appointmentId={payAppt.id}
+          orderId={null}
+          itemName="Appointment"
+          paymentType="appointment"
+          onClose={() => setPayAppt(null)}
+          onSuccess={() => {
+            setPayAppt(null);
+            setAlert({ type: "success", message: "Payment completed successfully!" });
+            fetchAppointments();
+          }}
+        />
+      )}
     </div>
   );
 }

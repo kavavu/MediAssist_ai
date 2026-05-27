@@ -1,8 +1,12 @@
 /**
  * Medicines list: GET /api/patient/medicines. "Order" button POSTs to /api/patient/orders/medicine. Shows stock and prescription flag.
+ * After ordering, user can pay for the order.
  */
 import React, { useEffect, useState } from "react";
 import api from "../services/api.js";
+import PaymentModal from "../components/PaymentModal.jsx";
+
+
 
 export default function MedicinesPage() {
   const [medicines, setMedicines] = useState([]);
@@ -10,6 +14,8 @@ export default function MedicinesPage() {
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [orderingId, setOrderingId] = useState(null);
+  const [payOrder, setPayOrder] = useState(null);
+  const [payItemName, setPayItemName] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -30,7 +36,13 @@ export default function MedicinesPage() {
     setActionMessage("");
     try {
       const res = await api.post("/patient/orders/medicine", { medicine_id: id });
+      const order = res.data.order;
       setActionMessage(res.data.message || "Medicine ordered successfully");
+      if (order) {
+        setPayOrder(order);
+        const med = medicines.find((m) => m.id === id);
+        setPayItemName(med?.name || "Medicine");
+      }
     } catch (err) {
       setActionMessage(err.response?.data?.message || "Failed to order medicine");
     } finally {
@@ -141,6 +153,18 @@ export default function MedicinesPage() {
             );
           })}
         </div>
+      )}
+
+      {payOrder && (
+        <PaymentModal
+          amount={Number(payOrder.total_amount || payOrder.price || 0)}
+          orderId={payOrder.id}
+          appointmentId={null}
+          itemName={payItemName || "Medicine"}
+          paymentType="medicine"
+          onSuccess={() => { setPayOrder(null); setPayItemName(""); setActionMessage("Payment completed successfully!"); }}
+          onClose={() => { setPayOrder(null); setPayItemName(""); }}
+        />
       )}
     </div>
   );

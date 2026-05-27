@@ -3,7 +3,7 @@ Symptom prediction service.
 
 Responsibilities:
 - Clean and validate raw symptom text.
-- Call the ML model for predictions (top-3, with confidence and validation).
+- Call the Hybrid Clinical Prediction Engine for predictions (top-3, with confidence and validation).
 - Persist a SymptomReport row including the primary prediction and
   top_predictions JSON.
 - Return structured data for the API layer to serialize.
@@ -33,13 +33,13 @@ def _prepare_input(symptoms_text: str) -> str:
     return cleaned
 
 
-def predict_and_save(user_id: int, symptoms_text: str) -> Tuple[SymptomReport, List[Dict[str, float]], bool]:
+def predict_and_save(user_id: int, symptoms_text: str) -> Tuple[SymptomReport, Dict, bool]:
     """
     Run the symptom classifier on the given text, save a SymptomReport,
     and return:
-      (report, predictions, low_confidence_flag)
+      (report, full_result, low_confidence_flag)
 
-    - predictions: list of {"condition": str, "confidence": float}
+    - full_result: the complete prediction result dict from the clinical engine
     - low_confidence_flag: True if the top prediction is below threshold.
 
     Raises SymptomValidationError when the input is not suitable for prediction
@@ -48,7 +48,7 @@ def predict_and_save(user_id: int, symptoms_text: str) -> Tuple[SymptomReport, L
     cleaned = _prepare_input(symptoms_text)
 
     result = predict_topk(cleaned)
-    if "error" in result:
+    if result.get("error"):
         raise SymptomValidationError(result["error"])
 
     predictions = result.get("predictions", [])
@@ -74,4 +74,4 @@ def predict_and_save(user_id: int, symptoms_text: str) -> Tuple[SymptomReport, L
     db.session.commit()
     db.session.refresh(report)
 
-    return report, predictions, low_confidence
+    return report, result, low_confidence

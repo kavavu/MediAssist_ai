@@ -27,6 +27,9 @@ export const getDoctorStats = () =>
 export const getAiResponse = (consultationId) =>
   api.get(`/consultation/ai-response/${consultationId}`);
 
+export const getAiFullResponse = (consultationId) =>
+  api.get(`/consultation/ai-response/${consultationId}/full`);
+
 export const getConsultationHistory = (consultationId) =>
   api.get(`/consultation/history/${consultationId}`);
 

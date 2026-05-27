@@ -11,7 +11,7 @@ from ..services import appointment_service
 appointment_bp = Blueprint("appointment", __name__)
 
 
-@appointment_bp.route("/appointments/doctor/<int:doctor_id>/available-slots", methods=["GET"])
+@appointment_bp.route("/doctor/<int:doctor_id>/available-slots", methods=["GET"])
 @jwt_required()
 def available_slots(doctor_id):
     """GET /api/appointments/doctor/<id>/available-slots?date=YYYY-MM-DD"""
@@ -27,7 +27,7 @@ def available_slots(doctor_id):
     return jsonify({"success": True, "slots": slots}), 200
 
 
-@appointment_bp.route("/appointments/book", methods=["POST"])
+@appointment_bp.route("/book", methods=["POST"])
 @jwt_required()
 @role_required("patient")
 def book():
@@ -61,7 +61,7 @@ def book():
         return jsonify({"error": str(exc)}), 400
 
 
-@appointment_bp.route("/appointments/patient", methods=["GET"])
+@appointment_bp.route("/patient", methods=["GET"])
 @jwt_required()
 @role_required("patient")
 def patient_appointments():
@@ -71,7 +71,7 @@ def patient_appointments():
     return jsonify({"success": True, "appointments": [a.to_dict() for a in appointments]}), 200
 
 
-@appointment_bp.route("/appointments/doctor", methods=["GET"])
+@appointment_bp.route("/doctor", methods=["GET"])
 @jwt_required()
 @role_required("doctor")
 def doctor_appointments():
@@ -81,7 +81,7 @@ def doctor_appointments():
     return jsonify({"success": True, "appointments": [a.to_dict() for a in appointments]}), 200
 
 
-@appointment_bp.route("/appointments/<int:appointment_id>/cancel", methods=["POST"])
+@appointment_bp.route("/<int:appointment_id>/cancel", methods=["POST"])
 @jwt_required()
 def cancel(appointment_id):
     """POST /api/appointments/<id>/cancel"""

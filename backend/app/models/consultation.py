@@ -48,6 +48,8 @@ class Consultation(db.Model):
     doctor = db.relationship("User", foreign_keys=[doctor_id], back_populates="consultations_as_doctor")
     followups = db.relationship("FollowUp", backref="consultation", cascade="all, delete-orphan")
     appointments = db.relationship("Appointment", back_populates="consultation")
+    review = db.relationship("Review", back_populates="consultation", uselist=False, cascade="all, delete-orphan")
+    files = db.relationship("FileAttachment", back_populates="consultation", cascade="all, delete-orphan")
 
     def to_dict(self, include_response=True):
         data = {
@@ -71,6 +73,7 @@ class Consultation(db.Model):
             "doctor_is_available": getattr(self.doctor, "is_available", None),
             "doctor_current_load": getattr(self.doctor, "current_load", None),
             "doctor_is_verified": getattr(self.doctor, "is_verified", None),
+            "has_review": self.review is not None,
             "ai_insight": self.ai_insight,
             "ai_risk_level": self.ai_risk_level,
             "ai_suggested_steps": self.ai_suggested_steps,

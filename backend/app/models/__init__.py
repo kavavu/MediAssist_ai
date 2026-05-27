@@ -8,6 +8,7 @@ that reference Consultation. FollowUp must be imported before User as well.
 """
 from .consultation import Consultation
 from .followup import FollowUp
+from .file_attachment import FileAttachment
 from .user import User
 from .patient_profile import PatientProfile
 from .symptom_report import SymptomReport
@@ -15,6 +16,8 @@ from .lab_test import LabTest
 from .medicine import Medicine
 from .appointment import Appointment
 from .order import Order
+from .payment import Payment
+from .review import Review
 
 __all__ = [
     "User",
@@ -24,6 +27,9 @@ __all__ = [
     "Medicine",
     "Appointment",
     "Order",
+    "Payment",
+    "Review",
     "Consultation",
     "FollowUp",
+    "FileAttachment",
 ]

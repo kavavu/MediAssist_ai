@@ -3,6 +3,7 @@
  * Session is stored in localStorage (access_token + current_user). Do not change key names.
  */
 import api from "./api.js";
+import { reconnectSocket } from "./socket.js";
 
 const USER_KEY = "current_user";
 const TOKEN_KEY = "access_token";
@@ -22,6 +23,7 @@ export function getCurrentUser() {
 export function setSession(token, user) {
   window.localStorage.setItem(TOKEN_KEY, token);
   window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+  reconnectSocket();
   window.dispatchEvent(new Event("auth-change"));
 }
 
@@ -29,6 +31,7 @@ export function setSession(token, user) {
 export function logout() {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  reconnectSocket();
   // Notify all tabs/components that auth state changed
   window.dispatchEvent(new Event("auth-change"));
 }

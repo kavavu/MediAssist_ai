@@ -10,7 +10,7 @@ Patient dashboard API (all routes require JWT + role "patient"):
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_current_user
 
-from ..models import SymptomReport, LabTest, Medicine, Order
+from ..models import SymptomReport, LabTest, Medicine
 from ..services.order_service import create_lab_test_order, create_medicine_order
 from ..utils.decorators import role_required
 

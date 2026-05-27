@@ -28,6 +28,7 @@ class Appointment(db.Model):
     patient = db.relationship("User", back_populates="appointments_as_patient", foreign_keys=[patient_id])
     doctor = db.relationship("User", back_populates="appointments_as_doctor", foreign_keys=[doctor_id])
     consultation = db.relationship("Consultation", back_populates="appointments")
+    payment = db.relationship("Payment", back_populates="appointment", uselist=False, cascade="all, delete-orphan")
 
     def to_dict(self, include_names=True):
         data = {

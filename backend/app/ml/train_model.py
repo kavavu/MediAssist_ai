@@ -23,19 +23,11 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.preprocessing import StandardScaler
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Logger for this module (do NOT call basicConfig here — it overrides root logger)
 logger = logging.getLogger(__name__)
 
 # Paths

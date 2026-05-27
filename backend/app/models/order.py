@@ -22,6 +22,7 @@ class Order(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     user = db.relationship("User", back_populates="orders")
+    payment = db.relationship("Payment", back_populates="order", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Order id={self.id} user_id={self.user_id} {self.item_type}={self.item_id}>"

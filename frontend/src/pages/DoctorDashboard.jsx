@@ -7,9 +7,16 @@ import {
   sendFollowUp,
   getDoctorStats,
   getAiResponse,
+  getAiFullResponse,
   getConsultationHistory,
 } from "../services/consultation.js";
-import { getSocket, joinConsultationRoom, leaveConsultationRoom, joinDoctorRoom } from "../services/socket.js";
+import { getSocket, joinConsultationRoom, leaveConsultationRoom, joinDoctorRoom, leaveDoctorRoom } from "../services/socket.js";
+import { getConsultationFiles } from "../services/upload.js";
+import SocketStatusBadge from "../components/SocketStatusBadge.jsx";
+import FileUploadZone from "../components/FileUploadZone.jsx";
+import { useToast } from "../components/ToastProvider.jsx";
+import { SkeletonStats, SkeletonCard } from "../components/Skeleton.jsx";
+import EmptyState from "../components/EmptyState.jsx";
 
 /* ------------------------------------------------------------------ */
 /* Helper Components                                                  */
@@ -123,15 +130,13 @@ const QUICK_REPLIES = [
 ];
 
 const ChatPanel = ({ consultation }) => {
+  const toast = useToast();
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
-  const bottomRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const socketRef = useRef(null);
-
   const fetchHistory = useCallback(async () => {
     try {
       const res = await getConsultationHistory(consultation.id);
@@ -139,16 +144,16 @@ const ChatPanel = ({ consultation }) => {
       const chatMessages = history
         .filter((h) => h.type === "followup")
         .map((h) => ({
-          id: h.timestamp,
-          sender: h.data.sender_role,
-          senderName: h.data.sender_name,
-          text: h.data.message,
+          id: h.data?.message_id || h.timestamp || `${h.data?.sender_role}-${h.timestamp}`,
+          sender: h.data?.sender_role,
+          senderName: h.data?.sender_name,
+          text: h.data?.message,
           timestamp: h.timestamp_relative,
           fullTimestamp: h.timestamp,
         }));
       setMessages(chatMessages);
-    } catch (err) {
-      console.error("Failed to load chat", err);
+    } catch {
+      // silently fail; user can retry by reopening chat
     } finally {
       setLoading(false);
     }
@@ -162,7 +167,7 @@ const ChatPanel = ({ consultation }) => {
 
     // Set up socket listener for new messages
     const socket = getSocket();
-    socketRef.current = socket;
+    if (!socket) return;
 
     const handleNewMessage = (data) => {
       try {
@@ -188,8 +193,8 @@ const ChatPanel = ({ consultation }) => {
             },
           ];
         });
-      } catch (err) {
-        console.error("[Socket] Error handling new_message:", err);
+      } catch {
+        // ignore socket handling errors
       }
     };
 
@@ -199,8 +204,8 @@ const ChatPanel = ({ consultation }) => {
       try {
         socket.off("new_message", handleNewMessage);
         leaveConsultationRoom(consultation.id);
-      } catch (err) {
-        console.error("[Socket] Error cleaning up chat listeners:", err);
+      } catch {
+        // ignore cleanup errors
       }
     };
   }, [fetchHistory, consultation.id]);
@@ -222,7 +227,7 @@ const ChatPanel = ({ consultation }) => {
       setShowQuickReplies(false);
       // Don't fetch history — the socket will push the new message
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to send message");
+      toast.error(err.response?.data?.error || "Failed to send message");
     } finally {
       setSending(false);
     }
@@ -259,7 +264,7 @@ const ChatPanel = ({ consultation }) => {
             new Date(msg.fullTimestamp).toDateString() !== new Date(messages[idx - 1].fullTimestamp).toDateString()
           );
           return (
-            <div key={idx}>
+            <div key={msg.id || `${msg.sender}-${msg.fullTimestamp}`}>
               {showDate && (
                 <div className="flex justify-center my-2">
                   <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
@@ -286,7 +291,6 @@ const ChatPanel = ({ consultation }) => {
           );
         })}
         <div ref={messagesEndRef} />
-        <div ref={bottomRef} />
       </div>
 
       {/* Quick Replies */}
@@ -414,6 +418,12 @@ export default function DoctorDashboard() {
   const [urgency, setUrgency] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  /* AI Full Response state */
+  const [aiFullResponse, setAiFullResponse] = useState("");
+  const [aiFullResponseLoading, setAiFullResponseLoading] = useState(false);
+  const [aiFullResponseSource, setAiFullResponseSource] = useState("");
+  const [showAiDraft, setShowAiDraft] = useState(false);
+
   /* Editing mode */
   const [isEditing, setIsEditing] = useState(false);
 
@@ -425,9 +435,20 @@ export default function DoctorDashboard() {
   const [showChat, setShowChat] = useState(false);
 
   const prevCountRef = useRef(0);
-  const socketRef = useRef(null);
-
   const selected = consultations.find((c) => c.id === selectedId);
+
+  // Load files when selected patient changes
+  useEffect(() => {
+    if (!selected) return;
+    if (selected.files) return; // already loaded
+    getConsultationFiles(selected.id)
+      .then((files) => {
+        setConsultations((prev) =>
+          prev.map((c) => (c.id === selected.id ? { ...c, files } : c))
+        );
+      })
+      .catch(() => {});
+  }, [selectedId]);
 
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -463,10 +484,10 @@ export default function DoctorDashboard() {
   /* Real-time socket listeners (replaces polling) */
   useEffect(() => {
     const socket = getSocket();
-    socketRef.current = socket;
+    if (!socket) return;
 
     // Get current user from localStorage to join doctor room
-    const userStr = window.localStorage.getItem("user");
+    const userStr = window.localStorage.getItem("current_user");
     let doctorId = null;
     if (userStr) {
       try {
@@ -500,8 +521,8 @@ export default function DoctorDashboard() {
           }
           return updated;
         });
-      } catch (err) {
-        console.error("[Socket] Error handling new_consultation:", err);
+      } catch {
+        // ignore socket handling errors
       }
     };
 
@@ -514,8 +535,8 @@ export default function DoctorDashboard() {
             c.id === data.consultation_id ? { ...c, ...data.data } : c
           )
         );
-      } catch (err) {
-        console.error("[Socket] Error handling consultation_updated:", err);
+      } catch {
+        // ignore socket handling errors
       }
     };
 
@@ -526,8 +547,15 @@ export default function DoctorDashboard() {
       try {
         socket.off("new_consultation", handleNewConsultation);
         socket.off("consultation_updated", handleConsultationUpdated);
-      } catch (err) {
-        console.error("[Socket] Error cleaning up dashboard listeners:", err);
+        if (doctorId) {
+          try {
+            leaveDoctorRoom(doctorId);
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore cleanup errors
       }
     };
   }, []);
@@ -551,10 +579,12 @@ export default function DoctorDashboard() {
       );
     }
     setFiltered(data);
+    // Only auto-select first item if nothing is selected AND we have data
     if (data.length > 0 && !selectedId) {
       setSelectedId(data[0].id);
     }
-  }, [consultations, filterStatus, search, selectedId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consultations, filterStatus, search]);
 
   /* Reset form when selection changes */
   useEffect(() => {
@@ -566,7 +596,7 @@ export default function DoctorDashboard() {
       setIsEditing(false);
       setShowChat(false);
     }
-  }, [selectedId, selected?.response_acknowledgement]);
+  }, [selectedId]);
 
   const handleRespond = async () => {
     if (!selected) return;
@@ -582,7 +612,7 @@ export default function DoctorDashboard() {
       setToast("Response submitted successfully");
       setIsEditing(false);
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to submit");
+      toast.error(err.response?.data?.error || "Failed to submit");
     } finally {
       setSubmitting(false);
     }
@@ -602,7 +632,7 @@ export default function DoctorDashboard() {
       setToast("Response updated successfully");
       setIsEditing(false);
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to update");
+      toast.error(err.response?.data?.error || "Failed to update");
     } finally {
       setSubmitting(false);
     }
@@ -615,7 +645,7 @@ export default function DoctorDashboard() {
       await fetchData();
       setToast("Case marked as resolved");
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to resolve");
+      toast.error(err.response?.data?.error || "Failed to resolve");
     }
   };
 
@@ -635,10 +665,71 @@ export default function DoctorDashboard() {
         setUrgency(s.urgency);
       }
     } catch (err) {
-      console.error("AI assist error:", err);
-      const msg = err.response?.data?.error || err.message || "AI assist failed";
-      alert(msg);
+      const msg = err?.response?.data?.error || err?.message || "AI assist failed";
+      toast.error(msg);
     }
+  };
+
+  const handleAiFullResponse = async () => {
+    if (!selected) return;
+    setAiFullResponseLoading(true);
+    setShowAiDraft(true);
+    try {
+      const res = await getAiFullResponse(selected.id);
+      const data = res.data;
+      setAiFullResponse(data.response || "");
+      setAiFullResponseSource(data.source || "fallback");
+      // Also populate structured fields for editing
+      if (data.structured) {
+        setAcknowledgement(data.structured.acknowledgement || "");
+        setAdvice(data.structured.advice || "");
+        setTests(data.structured.tests || "");
+        setUrgency(data.structured.urgency || "");
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.message || "AI response generation failed";
+      toast.error(msg);
+      setShowAiDraft(false);
+    } finally {
+      setAiFullResponseLoading(false);
+    }
+  };
+
+  const handleApplyAiDraft = () => {
+    // Extract sections from the full response and populate fields
+    const draft = aiFullResponse;
+    // Simple heuristic: split by common section headers
+    const lines = draft.split("\n");
+    let currentSection = "";
+    let ack = [], adv = [], tst = [], urg = [], flw = [];
+    
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      if (lower.includes("acknowledg")) { currentSection = "ack"; continue; }
+      if (lower.includes("clinical interpretation")) { currentSection = "adv"; continue; }
+      if (lower.includes("care recommendation")) { currentSection = "adv"; continue; }
+      if (lower.includes("recommended test")) { currentSection = "tst"; continue; }
+      if (lower.includes("urgency")) { currentSection = "urg"; continue; }
+      if (lower.includes("follow-up")) { currentSection = "flw"; continue; }
+      if (lower.includes("this assessment is ai-assisted")) continue;
+      if (line.trim().startsWith("---")) continue;
+      if (line.trim().startsWith("*")) continue;
+      
+      if (currentSection === "ack" && line.trim()) ack.push(line.trim());
+      if (currentSection === "adv" && line.trim()) adv.push(line.trim());
+      if (currentSection === "tst" && line.trim()) tst.push(line.trim());
+      if (currentSection === "urg" && line.trim()) urg.push(line.trim());
+      if (currentSection === "flw" && line.trim()) flw.push(line.trim());
+    }
+    
+    if (ack.length) setAcknowledgement(ack.join(" "));
+    if (adv.length) setAdvice(adv.join(" "));
+    if (tst.length) setTests(tst.join("\n"));
+    if (urg.length) setUrgency(urg.join(" "));
+    
+    setShowAiDraft(false);
+    setIsEditing(true);
+    toast.success("AI draft applied. Review and edit before sending.");
   };
 
   const handleViewHistory = async () => {
@@ -648,7 +739,7 @@ export default function DoctorDashboard() {
       setHistory(res.data.history || []);
       setShowHistory(true);
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to load history");
+      toast.error(err.response?.data?.error || "Failed to load history");
     }
   };
 
@@ -675,9 +766,14 @@ export default function DoctorDashboard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
-        <span className="ml-3 text-slate-500">Loading consultations...</span>
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          <SkeletonStats count={4} />
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-1"><SkeletonCard count={3} /></div>
+            <div className="lg:col-span-2"><SkeletonCard count={2} /></div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -697,6 +793,7 @@ export default function DoctorDashboard() {
               <h1 className="text-xl font-bold text-slate-800">Doctor Dashboard</h1>
               <p className="text-sm text-slate-500 mt-0.5">Manage patient consultations and responses</p>
             </div>
+            <SocketStatusBadge />
             {newCount > 0 && (
               <span className="bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse">
                 {newCount} NEW
@@ -753,7 +850,11 @@ export default function DoctorDashboard() {
             {/* List */}
             <div className="flex-1 overflow-y-auto">
               {filtered.length === 0 ? (
-                <div className="p-6 text-center text-slate-400 text-sm">No consultations found.</div>
+                <EmptyState
+                  icon="inbox"
+                  title="No patients in queue"
+                  description="New patient consultations will appear here when assigned to you."
+                />
               ) : (
                 filtered.map((c) => (
                   <button
@@ -781,13 +882,13 @@ export default function DoctorDashboard() {
           </div>
 
           {/* RIGHT PANEL - Patient Details */}
-          <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-y-auto shadow-sm">
+          <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm flex flex-col max-h-[calc(100vh-180px)]">
             {!selected ? (
               <div className="flex items-center justify-center h-full text-slate-400 text-sm">
                 Select a patient to view details
               </div>
             ) : (
-              <div className="p-5 space-y-5">
+              <div className="p-5 space-y-5 overflow-y-auto flex-1">
                 {/* HEADER */}
                 <div className="flex items-start justify-between">
                   <div>
@@ -823,8 +924,8 @@ export default function DoctorDashboard() {
                       .split(",")
                       .map((s) => s.trim())
                       .filter(Boolean)
-                      .map((s, i) => (
-                        <SymptomChip key={i} label={s} />
+                      .map((s) => (
+                        <SymptomChip key={s} label={s} />
                       ))}
                   </div>
                 </div>
@@ -858,61 +959,150 @@ export default function DoctorDashboard() {
                     <SectionTitle className="!mb-0">Doctor Response</SectionTitle>
                     <div className="flex gap-1.5">
                       <button
-                        onClick={() => handleAiAssist("full")}
-                        className="text-xs bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-md font-medium hover:bg-indigo-200 transition-colors"
+                        onClick={handleAiFullResponse}
+                        disabled={aiFullResponseLoading}
+                        className="text-xs bg-gradient-to-r from-indigo-100 to-violet-100 text-indigo-700 px-2.5 py-1 rounded-md font-medium hover:from-indigo-200 hover:to-violet-200 transition-colors disabled:opacity-50"
                       >
-                        🤖 Generate Full
+                        {aiFullResponseLoading ? (
+                          <span className="flex items-center gap-1">
+                            <span className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600" />
+                            Drafting…
+                          </span>
+                        ) : (
+                          <span>🤖 AI Draft Response</span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleAiAssist("full")}
+                        className="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md font-medium hover:bg-slate-200 transition-colors"
+                      >
+                        📝 Structured
                       </button>
                       <button
                         onClick={() => handleAiAssist("tests")}
                         className="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md font-medium hover:bg-slate-200 transition-colors"
                       >
-                        🧪 Suggest Tests
+                        🧪 Tests
                       </button>
                       <button
                         onClick={() => handleAiAssist("urgency")}
                         className="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md font-medium hover:bg-slate-200 transition-colors"
                       >
-                        ⚡ Add Urgency
+                        ⚡ Urgency
                       </button>
                     </div>
                   </div>
 
+                  {/* AI Full Response Draft Panel */}
+                  {showAiDraft && (
+                    <div className="mb-4 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-xl border border-indigo-200 p-4 animate-fade-in-up">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-indigo-600">
+                            <svg className="w-4 h-4 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                            </svg>
+                          </span>
+                          <span className="text-xs font-bold text-indigo-700">AI-Assisted Draft</span>
+                          {aiFullResponseSource && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${
+                              aiFullResponseSource === "openai"
+                                ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                                : "bg-amber-50 text-amber-600 border-amber-200"
+                            }`}>
+                              {aiFullResponseSource === "openai" ? "OpenAI" : "Fallback"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => setShowAiDraft(false)}
+                            className="text-[10px] text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+                          >
+                            Hide
+                          </button>
+                        </div>
+                      </div>
+                      {aiFullResponseLoading ? (
+                        <div className="space-y-2">
+                          <div className="h-3 bg-indigo-100 rounded animate-shimmer w-full" />
+                          <div className="h-3 bg-indigo-100 rounded animate-shimmer w-5/6" />
+                          <div className="h-3 bg-indigo-100 rounded animate-shimmer w-4/5" />
+                          <div className="h-3 bg-indigo-100 rounded animate-shimmer w-3/4" />
+                          <div className="flex items-center gap-1.5 mt-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot" />
+                            <span className="text-[10px] text-indigo-500 ml-1">Generating professional response…</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="bg-white/70 rounded-lg border border-indigo-100 p-3 max-h-64 overflow-y-auto">
+                            <pre className="text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">
+                              {aiFullResponse}
+                            </pre>
+                          </div>
+                          <div className="flex gap-2 mt-3">
+                            <button
+                              onClick={handleApplyAiDraft}
+                              className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium hover:bg-indigo-700 transition-colors"
+                            >
+                              ✓ Apply to Response Fields
+                            </button>
+                            <button
+                              onClick={handleAiFullResponse}
+                              className="text-xs bg-white border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-md font-medium hover:bg-indigo-50 transition-colors"
+                            >
+                              🔄 Regenerate
+                            </button>
+                            <button
+                              onClick={() => { setShowAiDraft(false); setAiFullResponse(""); }}
+                              className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium hover:bg-slate-50 transition-colors"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {canEdit && !isEditing ? (
                     <div className="space-y-3">
                       {selected.response_acknowledgement && (
-                        <div>
-                          <p className="text-xs font-semibold text-slate-500 mb-1">Acknowledgement</p>
-                          <InfoBox>{selected.response_acknowledgement}</InfoBox>
-                        </div>
-                      )}
-                      {selected.response_advice && (
-                        <div>
-                          <p className="text-xs font-semibold text-slate-500 mb-1">Advice</p>
-                          <InfoBox className="bg-emerald-50 border-emerald-100 text-emerald-800">
-                            {selected.response_advice}
-                          </InfoBox>
-                        </div>
-                      )}
-                      {selected.response_tests && (
-                        <div>
-                          <p className="text-xs font-semibold text-slate-500 mb-1">Recommended Tests</p>
-                          <InfoBox className="bg-blue-50 border-blue-100">
-                            <pre className="whitespace-pre-wrap font-sans text-sm">{selected.response_tests}</pre>
-                          </InfoBox>
-                        </div>
-                      )}
-                      {selected.response_urgency && (
-                        <div>
-                          <p className="text-xs font-semibold text-slate-500 mb-1">Urgency</p>
-                          <InfoBox className={`${selected.priority === "HIGH" ? "bg-red-50 border-red-100 text-red-800" : "bg-amber-50 border-amber-100 text-amber-800"}`}>
-                            {selected.response_urgency}
-                          </InfoBox>
-                        </div>
-                      )}
-                      {selected.responded_at_relative && (
-                        <p className="text-xs text-slate-400">Responded {selected.responded_at_relative}</p>
-                      )}
+                          <div>
+                            <p className="text-xs font-semibold text-slate-500 mb-1">Acknowledgement</p>
+                            <InfoBox>{selected.response_acknowledgement}</InfoBox>
+                          </div>
+                        )}
+                        {selected.response_advice && (
+                          <div>
+                            <p className="text-xs font-semibold text-slate-500 mb-1">Advice</p>
+                            <InfoBox className="bg-emerald-50 border-emerald-100 text-emerald-800">
+                              {selected.response_advice}
+                            </InfoBox>
+                          </div>
+                        )}
+                        {selected.response_tests && (
+                          <div>
+                            <p className="text-xs font-semibold text-slate-500 mb-1">Recommended Tests</p>
+                            <InfoBox className="bg-blue-50 border-blue-100">
+                              <pre className="whitespace-pre-wrap font-sans text-sm">{selected.response_tests}</pre>
+                            </InfoBox>
+                          </div>
+                        )}
+                        {selected.response_urgency && (
+                          <div>
+                            <p className="text-xs font-semibold text-slate-500 mb-1">Urgency</p>
+                            <InfoBox className={`${selected.priority === "HIGH" ? "bg-red-50 border-red-100 text-red-800" : "bg-amber-50 border-amber-100 text-amber-800"}`}>
+                              {selected.response_urgency}
+                            </InfoBox>
+                          </div>
+                        )}
+                        {selected.responded_at_relative && (
+                          <p className="text-xs text-slate-400">Responded {selected.responded_at_relative}</p>
+                        )}
 
                       {/* Action Buttons */}
                       <div className="flex flex-wrap gap-2 pt-2">
@@ -1022,6 +1212,19 @@ export default function DoctorDashboard() {
                       </div>
                     </div>
                   )}
+
+                  {/* File Attachments */}
+                  <div className="pt-4 border-t border-slate-100">
+                    <SectionTitle>Patient Attachments</SectionTitle>
+                    <FileUploadZone
+                      consultationId={selected.id}
+                      files={selected.files || []}
+                      onChange={(files) => {
+                        setSelected((s) => (s ? { ...s, files } : s));
+                      }}
+                      readOnly
+                    />
+                  </div>
 
                   {/* Inline Chat Panel */}
                   {showChat && <ChatPanel consultation={selected} />}

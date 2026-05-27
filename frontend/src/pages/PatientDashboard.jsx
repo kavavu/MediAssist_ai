@@ -2,6 +2,13 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import api from "../services/api.js";
 import { getPatientConsultations, getConsultationHistory, sendFollowUp } from "../services/consultation.js";
 import { getSocket, joinConsultationRoom, leaveConsultationRoom } from "../services/socket.js";
+import { createReview } from "../services/review.js";
+import { getConsultationFiles } from "../services/upload.js";
+import SocketStatusBadge from "../components/SocketStatusBadge.jsx";
+import FileUploadZone from "../components/FileUploadZone.jsx";
+import { useToast } from "../components/ToastProvider.jsx";
+import { SkeletonStats, SkeletonCard, SkeletonTable } from "../components/Skeleton.jsx";
+import EmptyState from "../components/EmptyState.jsx";
 
 /* ------------------------------------------------------------------ */
 /* Helper Components                                                  */
@@ -91,13 +98,14 @@ const PATIENT_QUICK_REPLIES = [
 ];
 
 const ChatModal = ({ consultation, onClose }) => {
+  const toast = useToast();
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const messagesEndRef = useRef(null);
-  const socketRef = useRef(null);
+  // socket connection is managed by getSocket() singleton
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -107,7 +115,7 @@ const ChatModal = ({ consultation, onClose }) => {
       const chatMessages = history
         .filter((h) => h.type === "followup")
         .map((h) => ({
-          id: h.timestamp,
+          id: h.data?.message_id || h.timestamp || `${h.data?.sender_role}-${h.timestamp}`,
           sender: h.data.sender_role,
           senderName: h.data.sender_name,
           text: h.data.message,
@@ -115,8 +123,8 @@ const ChatModal = ({ consultation, onClose }) => {
           fullTimestamp: h.timestamp,
         }));
       setMessages(chatMessages);
-    } catch (err) {
-      console.error("Failed to load chat history", err);
+    } catch {
+      // silently fail; user can retry by reopening chat
     } finally {
       setLoading(false);
     }
@@ -130,7 +138,7 @@ const ChatModal = ({ consultation, onClose }) => {
 
     // Set up socket listener for new messages
     const socket = getSocket();
-    socketRef.current = socket;
+    if (!socket) return;
 
     const handleNewMessage = (data) => {
       try {
@@ -156,8 +164,8 @@ const ChatModal = ({ consultation, onClose }) => {
             },
           ];
         });
-      } catch (err) {
-        console.error("[Socket] Error handling new_message:", err);
+      } catch {
+        // ignore socket handling errors
       }
     };
 
@@ -167,8 +175,8 @@ const ChatModal = ({ consultation, onClose }) => {
       try {
         socket.off("new_message", handleNewMessage);
         leaveConsultationRoom(consultation.id);
-      } catch (err) {
-        console.error("[Socket] Error cleaning up chat listeners:", err);
+      } catch {
+        // ignore cleanup errors
       }
     };
   }, [fetchHistory, consultation.id]);
@@ -190,7 +198,7 @@ const ChatModal = ({ consultation, onClose }) => {
       setShowQuickReplies(false);
       // Don't fetch history — the socket will push the new message
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to send message");
+      toast.error(err.response?.data?.error || "Failed to send message");
     } finally {
       setSending(false);
     }
@@ -206,7 +214,7 @@ const ChatModal = ({ consultation, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg h-[600px] flex flex-col">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
           <div>
@@ -238,7 +246,7 @@ const ChatModal = ({ consultation, onClose }) => {
               new Date(msg.fullTimestamp).toDateString() !== new Date(messages[idx - 1].fullTimestamp).toDateString()
             );
             return (
-              <div key={idx}>
+              <div key={msg.id || `${msg.sender}-${msg.fullTimestamp}`}>
                 {showDate && (
                   <div className="flex justify-center my-2">
                     <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
@@ -255,7 +263,7 @@ const ChatModal = ({ consultation, onClose }) => {
                     }`}
                   >
                     <p className="text-[10px] opacity-70 mb-0.5">{msg.senderName}</p>
-                    <p>{msg.text}</p>
+                    <p className="leading-snug">{msg.text}</p>
                     <p className={`text-[10px] mt-1 ${isPatient ? "text-primary-200" : "text-slate-400"}`}>
                       {formatFullTime(msg.fullTimestamp)}
                     </p>
@@ -374,6 +382,98 @@ const HistoryModal = ({ history, onClose }) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Review Modal                                                       */
+/* ------------------------------------------------------------------ */
+
+const ReviewModal = ({ consultation, onClose, onSubmitted }) => {
+  const [rating, setRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async () => {
+    if (rating < 1 || rating > 5) {
+      setError("Please select a star rating.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await createReview({
+        consultation_id: consultation.id,
+        rating,
+        comment,
+      });
+      onSubmitted();
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to submit review");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold text-slate-800">Leave a Review</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg">&times;</button>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          How was your experience with Dr. {consultation.doctor_name}?
+        </p>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">
+            <p className="text-xs text-red-700">{error}</p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-center gap-1 mb-4">
+          {[1, 2, 3, 4, 5].map((star) => (
+            <button
+              key={star}
+              onMouseEnter={() => setHoverRating(star)}
+              onMouseLeave={() => setHoverRating(0)}
+              onClick={() => setRating(star)}
+              className="text-2xl transition-colors focus:outline-none"
+            >
+              <span className={star <= (hoverRating || rating) ? "text-amber-400" : "text-slate-200"}>
+                ★
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          rows={3}
+          placeholder="Optional comment..."
+          className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 mb-4"
+        />
+
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          className="w-full px-4 py-2.5 bg-primary-600 text-white font-semibold rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
+        >
+          {loading ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+              Submitting...
+            </span>
+          ) : (
+            "Submit Review"
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Main Dashboard                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -386,8 +486,7 @@ export default function PatientDashboard() {
   const [history, setHistory] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [chatConsultation, setChatConsultation] = useState(null);
-  const socketRef = useRef(null);
-
+  const [reviewConsultation, setReviewConsultation] = useState(null);
   const fetchData = useCallback(async () => {
     try {
       const [predRes, consultRes] = await Promise.all([
@@ -395,7 +494,19 @@ export default function PatientDashboard() {
         getPatientConsultations(),
       ]);
       setPredictions(predRes.data.predictions || []);
-      setConsultations(consultRes.data.consultations || []);
+      const consultations = consultRes.data.consultations || [];
+      // Load files for each consultation
+      const withFiles = await Promise.all(
+        consultations.map(async (c) => {
+          try {
+            const files = await getConsultationFiles(c.id);
+            return { ...c, files };
+          } catch {
+            return { ...c, files: [] };
+          }
+        })
+      );
+      setConsultations(withFiles);
     } catch (err) {
       setError("Failed to load dashboard data.");
     } finally {
@@ -408,7 +519,7 @@ export default function PatientDashboard() {
 
     // Set up socket listeners for real-time updates
     const socket = getSocket();
-    socketRef.current = socket;
+    if (!socket) return;
 
     const handleConsultationUpdated = (data) => {
       try {
@@ -419,18 +530,25 @@ export default function PatientDashboard() {
             c.id === data.consultation_id ? { ...c, ...data.data } : c
           )
         );
-      } catch (err) {
-        console.error("[Socket] Error handling consultation_updated:", err);
+      } catch {
+        // ignore socket handling errors
       }
     };
 
+    const handleConnect = () => {
+      // Re-fetch data on reconnect to ensure state is fresh
+      fetchData();
+    };
+
     socket.on("consultation_updated", handleConsultationUpdated);
+    socket.on("connect", handleConnect);
 
     return () => {
       try {
         socket.off("consultation_updated", handleConsultationUpdated);
-      } catch (err) {
-        console.error("[Socket] Error cleaning up dashboard listeners:", err);
+        socket.off("connect", handleConnect);
+      } catch {
+        // ignore cleanup errors
       }
     };
   }, [fetchData]);
@@ -460,15 +578,17 @@ export default function PatientDashboard() {
       setHistory(res.data.history || []);
       setShowHistory(true);
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to load history");
+      toast.error(err.response?.data?.error || "Failed to load history");
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
-        <span className="ml-3 text-slate-500">Loading dashboard...</span>
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="max-w-5xl mx-auto space-y-6">
+          <SkeletonStats count={3} />
+          <SkeletonCard count={2} />
+        </div>
       </div>
     );
   }
@@ -479,12 +599,25 @@ export default function PatientDashboard() {
     <div className="min-h-screen bg-slate-50">
       {showHistory && <HistoryModal history={history} onClose={() => setShowHistory(false)} />}
       {chatConsultation && <ChatModal consultation={chatConsultation} onClose={() => setChatConsultation(null)} />}
+      {reviewConsultation && (
+        <ReviewModal
+          consultation={reviewConsultation}
+          onClose={() => setReviewConsultation(null)}
+          onSubmitted={() => {
+            setReviewConsultation(null);
+            fetchData();
+          }}
+        />
+      )}
 
       <div className="max-w-5xl mx-auto px-6 py-6">
         {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-xl font-bold text-slate-800">Patient Dashboard</h1>
-          <p className="text-sm text-slate-500 mt-1">View your consultations, chat with doctors, and manage your health</p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-slate-800">Patient Dashboard</h1>
+            <p className="text-sm text-slate-500 mt-1">View your consultations, chat with doctors, and manage your health</p>
+          </div>
+          <SocketStatusBadge />
         </div>
 
         {/* Disclaimer */}
@@ -503,10 +636,12 @@ export default function PatientDashboard() {
           </div>
 
           {consultations.length === 0 ? (
-            <div className="bg-white rounded-xl border border-slate-200 p-8 text-center">
-              <p className="text-slate-500 text-sm">No consultations yet.</p>
-              <p className="text-slate-400 text-xs mt-1">Go to Submit Symptoms to start one.</p>
-            </div>
+            <EmptyState
+              icon="inbox"
+              title="No consultations yet"
+              description="Submit your symptoms to get AI predictions and connect with a doctor."
+              action={{ label: "Submit Symptoms", onClick: () => window.location.href = "/patient/submit-symptoms" }}
+            />
           ) : (
             <div className="space-y-3">
               {consultations.map((c) => {
@@ -534,13 +669,13 @@ export default function PatientDashboard() {
                           {c.predicted_condition || "Unspecified Condition"}
                         </p>
                         <div className="flex flex-wrap mt-2">
-                          {(c.symptoms_clean || c.symptoms)
+                          {((c.symptoms_clean || c.symptoms) || "")
                             .split(",")
                             .map((s) => s.trim())
                             .filter(Boolean)
                             .slice(0, 5)
-                            .map((s, i) => (
-                              <SymptomChip key={i} label={s} />
+                            .map((s) => (
+                              <SymptomChip key={s} label={s} />
                             ))}
                         </div>
                         <DoctorBadge name={c.doctor_name} specialization={c.doctor_specialization} isAvailable={c.doctor_is_available} currentLoad={c.doctor_current_load} isVerified={c.doctor_is_verified} />
@@ -651,6 +786,20 @@ export default function PatientDashboard() {
                           </div>
                         )}
 
+                        {/* File Attachments */}
+                        <div className="pt-2">
+                          <SectionTitle>Attachments</SectionTitle>
+                          <FileUploadZone
+                            consultationId={c.id}
+                            files={c.files || []}
+                            onChange={(files) => {
+                              setConsultations((prev) =>
+                                prev.map((cc) => (cc.id === c.id ? { ...cc, files } : cc))
+                              );
+                            }}
+                          />
+                        </div>
+
                         {/* Actions */}
                         <div className="flex flex-wrap gap-2 pt-2">
                           {canChat && (
@@ -667,6 +816,14 @@ export default function PatientDashboard() {
                           >
                             View Full History
                           </button>
+                          {c.status === "resolved" && !c.has_review && (
+                            <button
+                              onClick={() => setReviewConsultation(c)}
+                              className="px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold rounded hover:bg-amber-100 transition-colors"
+                            >
+                              ⭐ Leave Review
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -681,9 +838,12 @@ export default function PatientDashboard() {
         <div>
           <h2 className="text-lg font-bold text-slate-800 mb-4">Prediction History</h2>
           {predictions.length === 0 ? (
-            <div className="bg-white rounded-xl border border-slate-200 p-8 text-center">
-              <p className="text-slate-500 text-sm">No predictions yet.</p>
-            </div>
+            <EmptyState
+              icon="search"
+              title="No predictions yet"
+              description="Use the symptom checker to get AI-powered condition predictions."
+              action={{ label: "Check Symptoms", onClick: () => window.location.href = "/patient/submit-symptoms" }}
+            />
           ) : (
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
               <div className="overflow-x-auto">

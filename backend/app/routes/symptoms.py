@@ -4,7 +4,7 @@ Symptom prediction API: POST /api/predict (patient only).
 Pipeline:
   - Validate symptoms_text presence and minimum length
   - Call prediction_service (which performs spell correction, validation,
-    and top-3 prediction using the ML model)
+    and top-3 prediction using the Hybrid Clinical Prediction Engine)
   - Save a SymptomReport row
   - Return a structured response including multiple predictions and a
     human-readable recommendation.
@@ -34,12 +34,12 @@ symptoms_bp = Blueprint("symptoms", __name__)
 def predict():
     """
     Predict disease from symptoms.
-    
-    Expects JSON: 
+
+    Expects JSON:
     {
         "symptoms": "fever headache cough"
     }
-    
+
     Response on success (201):
     {
         "predicted_condition": "Malaria",
@@ -51,16 +51,25 @@ def predict():
             {"condition": "Typhoid", "confidence": 0.10},
             {"condition": "Dengue", "confidence": 0.05}
         ],
-        "recommendation": "Consult a doctor or book a lab test"
+        "recommendation": "Consult a doctor or book a lab test",
+        "red_flag": false,
+        "match_quality": "High Match",
+        "severity": "HIGH",
+        "urgency_message": "Seek medical evaluation within 24 hours...",
+        "recommended_tests": [...],
+        "clinical_insight": "Malaria is a mosquito-borne disease...",
+        "ai_advice": "Monitor symptoms closely...",
+        "cleaned_symptoms": ["fever", "headache", "cough"],
+        "detected_red_flags": []
     }
-    
+
     Error responses:
     - 400: Missing or invalid symptoms
     - 500: Model not loaded or internal error
     """
     # Log request
     logger.info("Received prediction request")
-    
+
     # Check if model is loaded
     model_info = get_model_info()
     if not model_info.get("loaded"):
@@ -69,67 +78,84 @@ def predict():
             "message": "Prediction service unavailable. Model not loaded.",
             "error": model_info.get("error", "Unknown error")
         }), 500
-    
+
     # Parse request body
     data = request.get_json(silent=True) or {}
-    
+
     # Support both "symptoms" and "symptoms_text" for flexibility
     symptoms_text = data.get("symptoms") or data.get("symptoms_text")
-    
+
     if symptoms_text is None:
         logger.warning("Missing symptoms in request")
         return jsonify({"message": "Missing 'symptoms' field"}), 400
-    
+
     if not isinstance(symptoms_text, str):
         logger.warning(f"Invalid symptoms type: {type(symptoms_text)}")
         return jsonify({"message": "Symptoms must be a string"}), 400
-    
+
     symptoms_text = symptoms_text.strip()
-    
+
     if not symptoms_text:
         logger.warning("Empty symptoms text received")
         return jsonify({"message": "Symptoms cannot be empty"}), 400
-    
+
     logger.info(f"Processing symptoms: '{symptoms_text[:100]}...' " if len(symptoms_text) > 100 else f"Processing symptoms: '{symptoms_text}'")
-    
+
     # Get current user
     user = get_current_user()
     if not user:
         logger.error("Could not get current user from JWT")
         return jsonify({"message": "Authentication error"}), 401
-    
+
     try:
         # Make prediction and save report
-        report, predictions, low_confidence = predict_and_save(
+        report, result, low_confidence = predict_and_save(
             user_id=user.id, symptoms_text=symptoms_text
         )
-        
+
         # Get primary prediction
-        primary_prediction = predictions[0] if predictions else {"condition": "Unknown", "confidence": 0.0}
-        
+        primary_prediction = result.get("predictions", [{}])[0] if result.get("predictions") else {"condition": "Unknown", "confidence": 0.0}
+
+        red_flag = bool(result.get("red_flag", False))
+        match_quality = result.get("match_quality", "Low Match")
+        detected_red_flags = result.get("detected_red_flags", [])
+
         # Confidence-aware recommendation
-        if low_confidence:
-            recommendation = "The system cannot confidently predict a condition. Please consult a doctor."
+        if red_flag:
+            recommendation = "URGENT: Potentially serious symptoms detected. Seek immediate medical attention or call emergency services."
+        elif low_confidence:
+            recommendation = "The system cannot confidently predict a condition from these symptoms. Please consult a doctor for a proper evaluation."
         else:
-            recommendation = "Consult a doctor or book a lab test"
-        
+            recommendation = "Consult a doctor or book a lab test for confirmation and appropriate care."
+
         # Log success
         logger.info(f"Prediction successful: {primary_prediction['condition']} (confidence: {primary_prediction['confidence']:.4f})")
-        
-        # Return response matching expected format
+
+        # Return enriched response (backward compatible + new clinical fields)
         return jsonify({
+            # Backward-compatible fields
             "predicted_condition": primary_prediction["condition"],
             "confidence": primary_prediction["confidence"],
             "report_id": report.id,
             "symptoms": report.symptoms_text,
-            "predictions": predictions,
+            "predictions": result.get("predictions", []),
             "recommendation": recommendation,
+            "red_flag": red_flag,
+            "match_quality": match_quality,
+            "detected_red_flags": detected_red_flags,
+            # New clinical fields
+            "severity": result.get("severity", "LOW"),
+            "urgency_message": result.get("urgency_message", ""),
+            "recommended_tests": result.get("recommended_tests", []),
+            "clinical_insight": result.get("clinical_insight", ""),
+            "ai_advice": result.get("ai_advice", ""),
+            "cleaned_symptoms": [s.strip() for s in result.get("cleaned_text", "").split(",") if s.strip()],
         }), 201
-        
+
     except SymptomValidationError as exc:
         logger.warning(f"Validation error: {exc}")
         return jsonify({"message": str(exc)}), 400
-        
+
     except Exception as exc:
         logger.error(f"Prediction error: {exc}", exc_info=True)
         return jsonify({
@@ -141,14 +167,18 @@ def predict():
 @symptoms_bp.get("/model-info")
 def model_info():
     """
-    Get information about the loaded ML model.
-    
+    Get information about the loaded prediction engine.
+
     Response:
     {
         "loaded": true,
-        "accuracy": 0.9762,
-        "version": "1.0",
-        "num_symptoms": 132
+        "engine": "Hybrid Clinical Prediction Engine",
+        "version": "2.0",
+        "num_diseases": 15,
+        "num_symptoms": 85,
+        "diseases": [...],
+        "primary_method": "Rule-based weighted symptom scoring",
+        "fallback_method": "RandomForest (optional)"
     }
     """
     info = get_model_info()

@@ -1,11 +1,13 @@
 """
 Symptom classification model for MediAssist AI.
 
-This module handles:
-- Loading the trained ML model
-- Processing symptom input (text to binary vector)
-- Making predictions with confidence scores
-- Spell correction and validation
+This module is now a THIN WRAPPER around the Hybrid Clinical Prediction Engine
+(backend/app/ml/clinical/engine.py). The clinical engine uses rule-based weighted
+symptom scoring as the PRIMARY predictor, with the old RandomForest model available
+as an optional fallback for edge cases.
+
+The old ML model loading, prediction, red-flag detection, confidence calibration,
+and condition weighting have been superseded by the clinical engine.
 """
 
 from __future__ import annotations
@@ -13,18 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from difflib import get_close_matches
 from typing import Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # Directory for persisted model
@@ -40,28 +36,22 @@ _valid_symptoms: Optional[List[str]] = None
 def load_model() -> Dict:
     """
     Load the trained model and metadata from disk.
-    
-    Returns:
-        Dictionary containing:
-        - 'model': Trained sklearn model
-        - 'symptom_names': List of symptom feature names
-        - 'accuracy': Model accuracy score
-        - 'version': Model version
+    Kept for backward compatibility and ML fallback.
     """
     global _model_data
-    
+
     if _model_data is not None:
         return _model_data
-    
+
     if not os.path.isfile(_MODEL_PATH):
         logger.error(f"Model file not found: {_MODEL_PATH}")
         raise FileNotFoundError(
             f"Model file not found. Please run training first: {_MODEL_PATH}"
         )
-    
+
     try:
         _model_data = joblib.load(_MODEL_PATH)
-        logger.info(f"Model loaded successfully. Accuracy: {_model_data.get('accuracy', 'N/A')}")
+        logger.info(f"ML model loaded successfully. Accuracy: {_model_data.get('accuracy', 'N/A')}")
         return _model_data
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
@@ -69,17 +59,12 @@ def load_model() -> Dict:
 
 
 def load_valid_symptoms() -> List[str]:
-    """
-    Load the list of valid symptom names.
-    
-    Returns:
-        List of symptom names that the model recognizes
-    """
+    """Load the list of valid symptom names. Kept for backward compatibility."""
     global _valid_symptoms
-    
+
     if _valid_symptoms is not None:
         return _valid_symptoms
-    
+
     if os.path.isfile(_VALID_SYMPTOMS_PATH):
         try:
             with open(_VALID_SYMPTOMS_PATH, "r", encoding="utf-8") as f:
@@ -88,7 +73,7 @@ def load_valid_symptoms() -> List[str]:
             return _valid_symptoms
         except Exception as e:
             logger.warning(f"Failed to load valid symptoms: {e}")
-    
+
     # Fallback: extract from model data
     try:
         model_data = load_model()
@@ -99,144 +84,34 @@ def load_valid_symptoms() -> List[str]:
         return []
 
 
-def _tokenize(symptoms_text: str) -> List[str]:
-    """
-    Tokenize symptoms text into individual symptoms.
-    
-    Args:
-        symptoms_text: Raw symptoms text (comma or space separated)
-        
-    Returns:
-        List of symptom tokens
-    """
-    if not symptoms_text:
-        return []
-    
-    # Replace commas with spaces, then split
-    text = symptoms_text.replace(",", " ").replace("_", " ")
-    tokens = [t.strip().lower() for t in text.split()]
-    return [t for t in tokens if t]
-
-
-def _correct_symptoms(
-    symptoms: List[str],
-    valid_symptoms: List[str],
-    cutoff: float = 0.6
-) -> List[str]:
-    """
-    Apply spell correction to symptoms using fuzzy matching.
-    
-    Args:
-        symptoms: List of input symptoms
-        valid_symptoms: List of valid symptom names
-        cutoff: Minimum similarity score (0-1)
-        
-    Returns:
-        List of corrected symptoms
-    """
-    corrected = []
-    valid_lower = {v.lower(): v for v in valid_symptoms}
-    
-    for symptom in symptoms:
-        symptom_lower = symptom.lower()
-        
-        # Exact match
-        if symptom_lower in valid_lower:
-            corrected.append(valid_lower[symptom_lower])
-            continue
-        
-        # Try fuzzy matching
-        matches = get_close_matches(
-            symptom_lower,
-            valid_lower.keys(),
-            n=1,
-            cutoff=cutoff
-        )
-        
-        if matches:
-            corrected.append(valid_lower[matches[0]])
-            logger.debug(f"Corrected '{symptom}' -> '{valid_lower[matches[0]]}'")
-        else:
-            # Keep original if no match found
-            corrected.append(symptom)
-    
-    return corrected
-
-
-def _symptoms_to_vector(
-    symptoms: List[str],
-    symptom_names: List[str]
-) -> pd.DataFrame:
-    """
-    Convert list of symptoms to binary feature vector.
-    
-    Args:
-        symptoms: List of symptom names
-        symptom_names: List of all possible symptom features
-        
-    Returns:
-        DataFrame with binary features (1 if symptom present, 0 otherwise)
-    """
-    # Create binary vector
-    symptom_set = set(s.lower() for s in symptoms)
-    vector = [1 if name.lower() in symptom_set else 0 for name in symptom_names]
-    
-    # Convert to DataFrame with proper column names
-    return pd.DataFrame([vector], columns=symptom_names)
-
-
 def predict(symptoms_text: str) -> Tuple[Optional[str], float]:
     """
     Predict disease from symptoms text.
-    
-    Args:
-        symptoms_text: String of symptoms (e.g., "fever headache cough")
-        
+    Delegates to the clinical engine for the primary prediction.
+
     Returns:
         Tuple of (predicted_condition, confidence_score)
         Returns (None, 0.0) if prediction fails
     """
-    logger.info(f"Prediction request: '{symptoms_text}'")
-    
+    logger.info(f"Prediction request (wrapper): '{symptoms_text}'")
+
     if not symptoms_text or not symptoms_text.strip():
         logger.warning("Empty symptoms text received")
         return None, 0.0
-    
+
     try:
-        # Load model
-        model_data = load_model()
-        model = model_data["model"]
-        symptom_names = model_data["symptom_names"]
-        
-        # Tokenize and correct symptoms
-        tokens = _tokenize(symptoms_text)
-        logger.info(f"Tokens: {tokens}")
-        
-        if not tokens:
-            logger.warning("No valid symptom tokens found")
+        from .clinical.engine import predict_topk
+        result = predict_topk(symptoms_text, k=1, use_ml_fallback=False)
+
+        if result.get("error"):
+            logger.warning(f"Clinical engine error: {result['error']}")
             return None, 0.0
-        
-        valid_symptoms = load_valid_symptoms()
-        corrected = _correct_symptoms(tokens, valid_symptoms)
-        logger.info(f"Corrected symptoms: {corrected}")
-        
-        # Convert to feature vector
-        X = _symptoms_to_vector(corrected, symptom_names)
-        
-        # Predict
-        prediction = model.predict(X)[0]
-        
-        # Get confidence (probability)
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X)[0]
-            confidence = float(proba.max())
-        else:
-            confidence = 0.8  # Default confidence if not available
-        
-        logger.info(f"Prediction: {prediction}, Confidence: {confidence:.4f}")
-        
-        return prediction, confidence
-        
+
+        predictions = result.get("top_3_predictions", [])
+        if predictions:
+            return predictions[0]["condition"], predictions[0]["confidence"]
+        return None, 0.0
+
     except Exception as e:
         logger.error(f"Prediction error: {e}")
         return None, 0.0
@@ -249,78 +124,53 @@ def predict_topk(
 ) -> Dict:
     """
     Predict top-k diseases from symptoms with confidence scores.
-    
+
+    PRIMARY: Delegates to the Hybrid Clinical Prediction Engine.
+    The clinical engine uses rule-based weighted symptom scoring focused on
+    tropical diseases relevant to Kenya/East Africa.
+
     Args:
         symptoms_text: String of symptoms
         k: Number of top predictions to return
         confidence_threshold: Minimum confidence for "low_confidence" flag
-        
+
     Returns:
-        Dictionary with:
+        Dictionary with backward-compatible keys plus new clinical fields:
         - cleaned_text: Normalized symptom string
         - predictions: List of {condition, confidence} dicts
-        - low_confidence: Boolean indicating if top prediction is below threshold
+        - low_confidence: Boolean
+        - red_flag: Boolean
+        - detected_red_flags: List of detected emergency symptoms
+        - match_quality: String label ("High Match", "Moderate Match", "Low Match")
+        - severity: str (LOW, MEDIUM, HIGH)
+        - urgency_message: str
+        - recommended_tests: list of str
+        - clinical_insight: str
+        - ai_advice: str
     """
-    logger.info(f"Top-k prediction request: '{symptoms_text}'")
-    
-    if not symptoms_text or not symptoms_text.strip():
-        return {
-            "cleaned_text": "",
-            "predictions": [],
-            "low_confidence": True
-        }
-    
+    logger.info(f"Top-k prediction request (wrapper): '{symptoms_text}'")
+
     try:
-        # Load model
-        model_data = load_model()
-        model = model_data["model"]
-        symptom_names = model_data["symptom_names"]
-        
-        # Tokenize and correct
-        tokens = _tokenize(symptoms_text)
-        valid_symptoms = load_valid_symptoms()
-        corrected = _correct_symptoms(tokens, valid_symptoms)
-        
-        if not corrected:
-            return {
-                "error": "No valid symptoms recognized. Please enter valid medical symptoms."
-            }
-        
-        cleaned_text = ", ".join(corrected)
-        
-        # Convert to vector
-        X = _symptoms_to_vector(corrected, symptom_names)
-        
-        # Get predictions
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X)[0]
-            classes = model.classes_
-            
-            # Sort by probability
-            scored = sorted(
-                [{"condition": cls, "confidence": float(p)} 
-                 for cls, p in zip(classes, proba)],
-                key=lambda x: x["confidence"],
-                reverse=True
-            )
-            
-            top = scored[:max(1, k)]
-            top_conf = top[0]["confidence"] if top else 0.0
-            
-            return {
-                "cleaned_text": cleaned_text,
-                "predictions": top,
-                "low_confidence": top_conf < confidence_threshold
-            }
-        else:
-            # Fallback for models without predict_proba
-            pred = model.predict(X)[0]
-            return {
-                "cleaned_text": cleaned_text,
-                "predictions": [{"condition": pred, "confidence": 0.8}],
-                "low_confidence": False
-            }
-            
+        from .clinical.engine import predict_topk as clinical_predict_topk
+        result = clinical_predict_topk(symptoms_text, k=k, confidence_threshold=confidence_threshold)
+
+        # Map clinical engine response to backward-compatible format
+        # plus new fields
+        return {
+            "cleaned_text": ", ".join(result.get("cleaned_symptoms", [])),
+            "predictions": result.get("top_3_predictions", []),
+            "low_confidence": result.get("low_confidence", True),
+            "red_flag": result.get("red_flag", False),
+            "detected_red_flags": result.get("detected_red_flags", []),
+            "match_quality": result.get("match_quality", "Low Match"),
+            "severity": result.get("severity", "LOW"),
+            "urgency_message": result.get("urgency_message", ""),
+            "recommended_tests": result.get("recommended_tests", []),
+            "clinical_insight": result.get("clinical_insight", ""),
+            "ai_advice": result.get("ai_advice", ""),
+            "error": result.get("error"),
+        }
+
     except Exception as e:
         logger.error(f"Top-k prediction error: {e}")
         return {
@@ -330,20 +180,24 @@ def predict_topk(
 
 def get_model_info() -> Dict:
     """
-    Get information about the loaded model.
-    
-    Returns:
-        Dictionary with model metadata
+    Get information about the prediction engine.
+    Returns clinical engine info; ML model info is secondary.
     """
     try:
-        model_data = load_model()
-        return {
-            "loaded": True,
-            "accuracy": model_data.get("accuracy", "N/A"),
-            "version": model_data.get("version", "N/A"),
-            "num_symptoms": len(model_data.get("symptom_names", [])),
-            "model_path": _MODEL_PATH
-        }
+        from .clinical.engine import get_model_info as clinical_info
+        info = clinical_info()
+        # Also include ML model info if available
+        try:
+            ml_data = load_model()
+            info["ml_model"] = {
+                "loaded": True,
+                "accuracy": ml_data.get("accuracy", "N/A"),
+                "version": ml_data.get("version", "N/A"),
+                "num_symptoms": len(ml_data.get("symptom_names", [])),
+            }
+        except Exception:
+            info["ml_model"] = {"loaded": False}
+        return info
     except Exception as e:
         return {
             "loaded": False,

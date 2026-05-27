@@ -2,19 +2,31 @@
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from ..extensions import db
 from ..models import Consultation, User, FollowUp
 from ..utils.symptom_utils import (
     normalize_symptoms, generate_ai_insight,
     generate_acknowledgement, generate_advice,
     generate_suggested_tests, generate_urgency,
+    extract_severity_from_text,
 )
+from .openai_service import generate_doctor_response
 from ..utils.time_format import format_time_ago
+import logging
+
 from ..sockets.emitters import (
     emit_new_consultation,
     emit_consultation_update,
     emit_new_message,
 )
+
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# SECTION 8 — IMPROVED SPECIALIZATION MAPPING
+# ============================================================
 
 _CONDITION_SPECIALIZATION_MAP: Dict[str, str] = {
     "malaria": "General Doctor", "typhoid": "General Doctor", "dengue": "General Doctor",
@@ -22,19 +34,38 @@ _CONDITION_SPECIALIZATION_MAP: Dict[str, str] = {
     "pneumonia": "General Doctor", "covid": "General Doctor", "fever": "General Doctor",
     "diabetes": "Endocrinologist", "hypothyroidism": "Endocrinologist", "hyperthyroidism": "Endocrinologist",
     "asthma": "Pulmonologist", "bronchitis": "Pulmonologist", "copd": "Pulmonologist",
-    "respiratory": "Pulmonologist",
+    "respiratory": "Pulmonologist", "persistent cough": "Pulmonologist", "wheezing": "Pulmonologist",
     "hypertension": "Cardiologist", "heart disease": "Cardiologist", "heart attack": "Cardiologist",
-    "cardiac": "Cardiologist",
+    "cardiac": "Cardiologist", "chest pain": "Cardiologist", "palpitations": "Cardiologist",
     "migraine": "Neurologist", "epilepsy": "Neurologist", "stroke": "Neurologist",
-    "parkinson": "Neurologist",
+    "parkinson": "Neurologist", "severe headache": "Neurologist", "seizure": "Neurologist",
+    "confusion": "Neurologist", "slurred speech": "Neurologist", "weakness of one body side": "Neurologist",
     "gerd": "Gastroenterologist", "gastroenteritis": "Gastroenterologist",
     "peptic ulcer": "Gastroenterologist", "jaundice": "Gastroenterologist", "hepatitis": "Gastroenterologist",
-    "acne": "Dermatologist", "psoriasis": "Dermatologist", "eczema": "Dermatologist", "skin": "Dermatologist",
-    "arthritis": "Orthopedic", "osteoporosis": "Orthopedic",
+    "abdominal pain": "Gastroenterologist", "vomiting": "Gastroenterologist", "diarrhea": "Gastroenterologist",
+    "acne": "Dermatologist", "psoriasis": "Dermatologist", "eczema": "Dermatologist",
+    "skin": "Dermatologist", "skin rash": "Dermatologist", "itching": "Dermatologist",
+    "blister": "Dermatologist", "blackheads": "Dermatologist",
+    "arthritis": "Orthopedic", "osteoporosis": "Orthopedic", "joint pain": "Orthopedic",
+    "knee pain": "Orthopedic", "hip joint pain": "Orthopedic", "back pain": "Orthopedic",
+    "neck pain": "Orthopedic", "movement stiffness": "Orthopedic",
     "chronic kidney disease": "Nephrologist", "kidney": "Nephrologist",
-    "depression": "Psychiatrist", "anxiety": "Psychiatrist",
-    "cancer": "Oncologist",
+    "blood in urine": "Nephrologist", "burning micturition": "Nephrologist",
+    "depression": "Psychiatrist", "anxiety": "Psychiatrist", "suicide": "Psychiatrist",
+    "cancer": "Oncologist", "tumor": "Oncologist",
+    # Fallback category mappings
+    "cardiovascular": "Cardiologist",
+    "respiratory": "Pulmonologist",
+    "gastrointestinal": "Gastroenterologist",
+    "dermatological": "Dermatologist",
+    "neurological": "Neurologist",
+    "psychiatric": "Psychiatrist",
+    "endocrine": "Endocrinologist",
 }
+
+# ============================================================
+# SECTION 7 — IMPROVED PRIORITY ASSIGNMENT
+# ============================================================
 
 _SEVERE_KEYWORDS = {
     "chest pain", "severe pain", "difficulty breathing", "shortness of breath",
@@ -42,6 +73,9 @@ _SEVERE_KEYWORDS = {
     "blood in stool", "high fever", "severe headache", "paralysis",
     "heart attack", "stroke", "suicide", "allergic reaction", "anaphylaxis",
     "poisoning", "overdose", "trauma", "fracture", "burn",
+    "unresponsive", "coma", "altered sensorium", "slurred speech",
+    "weakness of one body side", "severe weakness", "severe bleeding",
+    "cant breathe", "can't breathe", "gasping", "blue lips",
 }
 
 _MODERATE_KEYWORDS = {
@@ -49,31 +83,130 @@ _MODERATE_KEYWORDS = {
     "cough", "sore throat", "body ache", "joint pain", "back pain",
     "abdominal pain", "headache", "fatigue", "loss of appetite",
     "chills", "sweating", "dehydration", "wheezing", "congestion",
+    "persistent cough", "burning micturition", "blood in urine",
+    "muscle pain", "stiff neck", "confusion", "palpitations",
 }
+
+# High-risk combinations that force HIGH priority even if individual keywords are moderate
+_HIGH_RISK_COMBINATIONS = [
+    {"chest pain", "shortness of breath"},
+    {"chest pain", "difficulty breathing"},
+    {"chest pain", "dizziness"},
+    {"chest pain", "palpitations"},
+    {"chest pain", "sweating"},
+    {"severe headache", "stiff neck"},
+    {"severe headache", "confusion"},
+    {"fever", "stiff neck", "confusion"},
+    {"vomiting", "severe headache", "confusion"},
+    {"unconscious", "seizure"},
+    {"weakness of one body side", "slurred speech"},
+    {"weakness of one body side", "confusion"},
+    {"high fever", "rash"},
+    {"high fever", "bleeding"},
+]
 
 
 def _normalize(text: Optional[str]) -> str:
     return (text or "").lower().strip()
 
 
-def determine_priority(symptoms: str, predicted_condition: Optional[str] = None) -> str:
-    combined = _normalize(symptoms) + " " + _normalize(predicted_condition)
-    for keyword in _SEVERE_KEYWORDS:
-        if keyword in combined:
+def determine_priority(symptoms: str, predicted_condition: Optional[str] = None, confidence_score: Optional[float] = None) -> str:
+    """
+    Determine consultation priority using:
+    - severe keyword detection in raw symptoms
+    - moderate keyword detection in raw symptoms
+    - high-risk symptom combinations in raw symptoms
+    - severity phrase extraction
+    - predicted condition only used if confidence is reasonable (>= 0.40)
+    """
+    text = _normalize(symptoms)
+    # Only trust predicted condition for priority if confidence is decent
+    condition_text = _normalize(predicted_condition) if (confidence_score is not None and confidence_score >= 0.40) else ""
+    combined = text + " " + condition_text
+
+    # Check high-risk combinations first (primarily on raw symptoms)
+    symptom_set = set(s.strip() for s in text.replace(",", " ").split())
+    for combo in _HIGH_RISK_COMBINATIONS:
+        if combo.issubset(symptom_set):
             return "HIGH"
+        # Also check substring matching for multi-word combos
+        matched = 0
+        for phrase in combo:
+            if phrase in text:
+                matched += 1
+        if matched >= len(combo):
+            return "HIGH"
+
+    # Severe keywords (check raw symptoms first, then combined if high confidence)
+    for keyword in _SEVERE_KEYWORDS:
+        if keyword in text:
+            return "HIGH"
+    if condition_text:
+        for keyword in _SEVERE_KEYWORDS:
+            if keyword in condition_text:
+                return "HIGH"
+
+    # Moderate keywords
     for keyword in _MODERATE_KEYWORDS:
-        if keyword in combined:
+        if keyword in text:
             return "MEDIUM"
+
+    # Severity phrase extraction
+    severity = extract_severity_from_text(symptoms)
+    if severity in ("severe", "sudden"):
+        return "HIGH"
+    if severity in ("moderate", "persistent"):
+        return "MEDIUM"
+
     return "LOW"
 
 
-def match_specialization(predicted_condition: Optional[str]) -> str:
+def match_specialization(predicted_condition: Optional[str], confidence_score: Optional[float] = None, symptoms: Optional[str] = None) -> str:
+    """
+    Match a predicted condition to a doctor specialization.
+    Falls back to General Doctor if no match or if confidence is very low.
+    For red-flag or low-confidence cases, infers specialization from symptoms when possible.
+    """
     condition = _normalize(predicted_condition)
-    if not condition:
-        return "General Doctor"
-    for key, spec in _CONDITION_SPECIALIZATION_MAP.items():
-        if key in condition:
-            return spec
+
+    # If confidence is decent, trust the predicted condition
+    if confidence_score is not None and confidence_score >= 0.20 and condition:
+        for key, spec in _CONDITION_SPECIALIZATION_MAP.items():
+            if key in condition:
+                return spec
+
+    # Low confidence or no condition: try to infer from symptoms
+    if symptoms:
+        text = _normalize(symptoms)
+        # Cardiovascular red flags
+        if any(k in text for k in ("chest pain", "shortness of breath", "difficulty breathing", "palpitations", "heart racing", "racing heart")):
+            return "Cardiologist"
+        # Neurological red flags
+        if any(k in text for k in ("seizure", "severe headache", "stiff neck", "confusion", "slurred speech", "weakness of one body side", "loss of consciousness", "passing out", "passed out")):
+            return "Neurologist"
+        # Respiratory
+        if any(k in text for k in ("persistent cough", "wheezing", "shortness of breath", "difficulty breathing")):
+            return "Pulmonologist"
+        # Dermatological
+        if any(k in text for k in ("skin rash", "itching", "red spots", "blister", "blackheads")):
+            return "Dermatologist"
+        # Gastrointestinal
+        if any(k in text for k in ("vomiting", "diarrhea", "abdominal pain", "stomach pain", "blood in stool", "jaundice")):
+            return "Gastroenterologist"
+        # Urinary / renal
+        if any(k in text for k in ("blood in urine", "burning micturition", "pain when peeing")):
+            return "Nephrologist"
+        # Psychiatric
+        if any(k in text for k in ("depression", "anxiety", "suicide", "suicidal")):
+            return "Psychiatrist"
+        # Endocrine
+        if any(k in text for k in ("diabetes", "thyroid", "weight gain", "weight loss", "excessive hunger", "polyuria")):
+            return "Endocrinologist"
+        # Orthopedic
+        if any(k in text for k in ("joint pain", "knee pain", "hip joint pain", "back pain", "neck pain", "movement stiffness", "swelling joints")):
+            return "Orthopedic"
+
+    # Final fallback
     return "General Doctor"
 
 
@@ -84,9 +217,9 @@ def find_best_doctor(specialization: str, preferred_doctor_id: Optional[int] = N
     2. Match specialization, prefer available doctors, sort by least load.
     3. Fallback: General doctors → any doctor.
     """
-    # Step 0: Patient override — if a preferred doctor is specified and valid
+    # Step 0: Patient override — if a preferred doctor is specified and valid and verified
     if preferred_doctor_id:
-        preferred = User.query.filter_by(id=preferred_doctor_id, role="doctor").first()
+        preferred = User.query.filter_by(id=preferred_doctor_id, role="doctor", is_verified=True).first()
         if preferred:
             return preferred
 
@@ -134,11 +267,6 @@ def find_best_doctor(specialization: str, preferred_doctor_id: Optional[int] = N
     return None
 
 
-def find_matching_doctor(specialization: str) -> Optional[User]:
-    """Backward-compatible wrapper around find_best_doctor."""
-    return find_best_doctor(specialization)
-
-
 def create_consultation(
     patient_id: int,
     symptoms: str,
@@ -147,8 +275,8 @@ def create_consultation(
     confidence_score: Optional[float] = None,
     preferred_doctor_id: Optional[int] = None,
 ) -> Tuple[Consultation, str]:
-    priority = determine_priority(symptoms, predicted_condition)
-    specialization = match_specialization(predicted_condition)
+    priority = determine_priority(symptoms, predicted_condition, confidence_score)
+    specialization = match_specialization(predicted_condition, confidence_score, symptoms)
     doctor = find_best_doctor(specialization, preferred_doctor_id=preferred_doctor_id)
 
     if doctor is None:
@@ -172,14 +300,27 @@ def create_consultation(
         ai_suggested_steps=ai_data["suggested_steps"],
     )
     db.session.add(consultation)
-    db.session.commit()
 
-    # Increment doctor load after assignment
-    doctor.current_load += 1
-    db.session.commit()
+    # Increment doctor load atomically using UPDATE to prevent race conditions
+    try:
+        db.session.flush()  # Ensure consultation gets an ID before commit
+        db.session.execute(
+            db.update(User)
+            .where(User.id == doctor.id)
+            .values(current_load=User.current_load + 1)
+        )
+        db.session.commit()
+        db.session.refresh(consultation)
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        logger.error(f"[DB] Failed to create consultation: {e}")
+        raise ValueError("Failed to create consultation. Please try again.") from e
 
-    # Emit real-time event to the assigned doctor
-    emit_new_consultation(doctor.id, consultation.to_dict())
+    # Emit real-time event to the assigned doctor (non-blocking; DB is source of truth)
+    try:
+        emit_new_consultation(doctor.id, consultation.to_dict())
+    except Exception as e:
+        logger.error(f"[Socket] Failed to emit new_consultation for doctor {doctor.id}: {e}")
 
     info = f"Priority: {priority} | Assigned to Dr. {doctor.name} ({doctor.specialization or 'General Doctor'})"
     return consultation, info
@@ -242,7 +383,9 @@ def respond_to_consultation(
     tests: Optional[str] = None,
     urgency: Optional[str] = None,
 ) -> Consultation:
-    consultation = Consultation.query.get_or_404(consultation_id)
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
     if consultation.doctor_id != doctor_id:
         raise PermissionError("You are not assigned to this consultation.")
     if consultation.status == "resolved":
@@ -261,30 +404,52 @@ def respond_to_consultation(
 
     consultation.status = "responded"
     consultation.responded_at = datetime.utcnow()
-    db.session.commit()
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        logger.error(f"[DB] Failed to respond to consultation: {e}")
+        raise ValueError("Failed to submit response. Please try again.") from e
 
     # Emit real-time update to the consultation room (patient will see it)
-    emit_consultation_update(consultation.id, consultation.to_dict())
+    try:
+        emit_consultation_update(consultation.id, consultation.to_dict())
+    except Exception as e:
+        logger.error(f"[Socket] Failed to emit consultation_updated for consultation {consultation.id}: {e}")
 
     return consultation
 
 
 def resolve_consultation(consultation_id: int, doctor_id: int) -> Consultation:
-    consultation = Consultation.query.get_or_404(consultation_id)
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
     if consultation.doctor_id != doctor_id:
         raise PermissionError("You are not assigned to this consultation.")
+    if consultation.status == "resolved":
+        raise ValueError("Consultation is already resolved.")
+
     consultation.status = "resolved"
     consultation.resolved_at = datetime.utcnow()
-    db.session.commit()
 
-    # Decrement doctor load, ensuring it never goes below 0
-    doctor = User.query.get(doctor_id)
-    if doctor:
-        doctor.current_load = max(0, doctor.current_load - 1)
+    # Decrement doctor load atomically using UPDATE to prevent race conditions
+    try:
+        db.session.execute(
+            db.update(User)
+            .where(User.id == doctor_id)
+            .values(current_load=db.func.greatest(0, User.current_load - 1))
+        )
         db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        logger.error(f"[DB] Failed to resolve consultation: {e}")
+        raise ValueError("Failed to resolve consultation. Please try again.") from e
 
     # Emit real-time update to the consultation room
-    emit_consultation_update(consultation.id, consultation.to_dict())
+    try:
+        emit_consultation_update(consultation.id, consultation.to_dict())
+    except Exception as e:
+        logger.error(f"[Socket] Failed to emit consultation_updated for consultation {consultation.id}: {e}")
 
     return consultation
 
@@ -295,7 +460,9 @@ def get_consultation_by_id(consultation_id: int) -> Optional[Consultation]:
 
 def generate_ai_response(consultation_id: int, doctor_id: int) -> Dict:
     """Auto-generate structured response suggestions for a doctor."""
-    consultation = Consultation.query.get_or_404(consultation_id)
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
     if consultation.doctor_id != doctor_id:
         raise PermissionError("You are not assigned to this consultation.")
 
@@ -311,6 +478,46 @@ def generate_ai_response(consultation_id: int, doctor_id: int) -> Dict:
     }
 
 
+def generate_ai_full_response(consultation_id: int, doctor_id: int) -> Dict:
+    """Generate a complete, human-like AI-assisted doctor response using OpenAI."""
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
+    if consultation.doctor_id != doctor_id:
+        raise PermissionError("You are not assigned to this consultation.")
+
+    symptoms = consultation.symptoms_clean or consultation.symptoms
+    condition = consultation.predicted_condition
+    priority = consultation.priority
+
+    # Build inputs grounded in clinical engine output
+    urgency_text = generate_urgency(priority)
+    tests_text = generate_suggested_tests(condition)
+    insight_data = generate_ai_insight(condition, symptoms, priority)
+    ai_insight = insight_data.get("insight", "")
+
+    result = generate_doctor_response(
+        predicted_condition=condition,
+        severity=priority,
+        symptoms=symptoms,
+        urgency=urgency_text,
+        recommended_tests=tests_text,
+        ai_insight=ai_insight,
+        patient_message=consultation.message,
+    )
+
+    return {
+        "full_response": result["response"],
+        "source": result["source"],
+        "structured": {
+            "acknowledgement": generate_acknowledgement(symptoms, condition),
+            "advice": generate_advice(condition, priority),
+            "tests": tests_text,
+            "urgency": urgency_text,
+        },
+    }
+
+
 def edit_response(
     consultation_id: int, doctor_id: int,
     acknowledgement: Optional[str] = None,
@@ -318,7 +525,9 @@ def edit_response(
     tests: Optional[str] = None,
     urgency: Optional[str] = None,
 ) -> Consultation:
-    consultation = Consultation.query.get_or_404(consultation_id)
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
     if consultation.doctor_id != doctor_id:
         raise PermissionError("You are not assigned to this consultation.")
     if consultation.status not in ("responded", "resolved"):
@@ -334,23 +543,33 @@ def edit_response(
         consultation.response_urgency = urgency.strip() or None
 
     consultation.responded_at = datetime.utcnow()
-    db.session.commit()
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        logger.error(f"[DB] Failed to edit response: {e}")
+        raise ValueError("Failed to update response. Please try again.") from e
 
     # Emit real-time update to the consultation room
-    emit_consultation_update(consultation.id, consultation.to_dict())
+    try:
+        emit_consultation_update(consultation.id, consultation.to_dict())
+    except Exception as e:
+        logger.error(f"[Socket] Failed to emit consultation_updated for consultation {consultation.id}: {e}")
 
     return consultation
 
 
 def add_followup(consultation_id: int, sender_id: int, sender_role: str, message: str) -> Dict:
-    consultation = Consultation.query.get_or_404(consultation_id)
-    
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
+
     # Validate sender is part of this consultation
     if sender_role == "doctor" and consultation.doctor_id != sender_id:
         raise PermissionError("You are not assigned to this consultation.")
     if sender_role == "patient" and consultation.patient_id != sender_id:
         raise PermissionError("You are not the patient for this consultation.")
-    
+
     followup = FollowUp(
         consultation_id=consultation_id,
         sender_role=sender_role,
@@ -358,10 +577,19 @@ def add_followup(consultation_id: int, sender_id: int, sender_role: str, message
         message=message.strip(),
     )
     db.session.add(followup)
-    db.session.commit()
+    try:
+        db.session.commit()
+        db.session.refresh(followup)
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        logger.error(f"[DB] Failed to add followup: {e}")
+        raise ValueError("Failed to send message. Please try again.") from e
 
     # Emit real-time message to the consultation room
-    emit_new_message(consultation.id, followup.to_dict())
+    try:
+        emit_new_message(consultation.id, followup.to_dict())
+    except Exception as e:
+        logger.error(f"[Socket] Failed to emit new_message for consultation {consultation.id}: {e}")
 
     return followup.to_dict()
 
@@ -435,9 +663,9 @@ def get_doctor_public_stats(doctor_id: int) -> Dict:
     }
 
 
-def get_recommended_doctor(condition: Optional[str] = None) -> Optional[Dict]:
+def get_recommended_doctor(condition: Optional[str] = None, confidence_score: Optional[float] = None, symptoms: Optional[str] = None) -> Optional[Dict]:
     """Get the recommended doctor for a given condition using smart assignment."""
-    specialization = match_specialization(condition)
+    specialization = match_specialization(condition, confidence_score, symptoms)
     doctor = find_best_doctor(specialization)
 
     if not doctor:
@@ -461,7 +689,9 @@ def get_recommended_doctor(condition: Optional[str] = None) -> Optional[Dict]:
 
 
 def get_consultation_history(consultation_id: int, user_id: int) -> List[Dict]:
-    consultation = Consultation.query.get_or_404(consultation_id)
+    consultation = Consultation.query.get(consultation_id)
+    if not consultation:
+        raise ValueError("Consultation not found")
     if consultation.patient_id != user_id and consultation.doctor_id != user_id:
         raise PermissionError("You do not have access to this consultation.")
 

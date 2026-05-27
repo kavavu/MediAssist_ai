@@ -7,7 +7,7 @@ All API routes are under /api/ (e.g. /api/auth/login, /api/predict).
 from flask import Flask
 from flask_cors import CORS
 
-from config import get_config
+from backend.config import get_config
 from .extensions import db, migrate, jwt
 
 
@@ -65,12 +65,18 @@ def _register_blueprints(app: Flask) -> None:
     from .routes.consultation import consultation_bp
     from .routes.admin import admin_bp
     from .routes.appointment import appointment_bp
+    from .routes.payment import payment_bp
+    from .routes.review import review_bp
+    from .routes.upload import upload_bp
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(symptoms_bp, url_prefix="/api")
     app.register_blueprint(patient_bp, url_prefix="/api/patient")
     app.register_blueprint(doctor_bp, url_prefix="/api/doctor")
     app.register_blueprint(consultation_bp, url_prefix="/api/consultation")
     app.register_blueprint(appointment_bp, url_prefix="/api/appointments")
+    app.register_blueprint(payment_bp, url_prefix="/api/payments")
+    app.register_blueprint(review_bp, url_prefix="/api/reviews")
+    app.register_blueprint(upload_bp, url_prefix="/api")
     app.register_blueprint(admin_bp)
 
 

@@ -1,8 +1,12 @@
 /**
  * Lab tests list: GET /api/patient/lab-tests. Each item has a "Book" button that POSTs to /api/patient/orders/lab-test.
+ * After booking, user can pay for the order.
  */
 import React, { useEffect, useState } from "react";
 import api from "../services/api.js";
+import PaymentModal from "../components/PaymentModal.jsx";
+
+
 
 export default function LabTestsPage() {
   const [tests, setTests] = useState([]);
@@ -10,6 +14,8 @@ export default function LabTestsPage() {
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [bookingId, setBookingId] = useState(null);
+  const [payOrder, setPayOrder] = useState(null);
+  const [payItemName, setPayItemName] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -30,7 +36,13 @@ export default function LabTestsPage() {
     setActionMessage("");
     try {
       const res = await api.post("/patient/orders/lab-test", { lab_test_id: id });
+      const order = res.data.order;
       setActionMessage(res.data.message || "Lab test booked successfully");
+      if (order) {
+        setPayOrder(order);
+        const test = tests.find((t) => t.id === id);
+        setPayItemName(test?.name || "Lab Test");
+      }
     } catch (err) {
       setActionMessage(err.response?.data?.message || "Failed to book lab test");
     } finally {
@@ -114,6 +126,18 @@ export default function LabTestsPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {payOrder && (
+        <PaymentModal
+          amount={Number(payOrder.total_amount || payOrder.price || 0)}
+          orderId={payOrder.id}
+          appointmentId={null}
+          itemName={payItemName || "Lab Test"}
+          paymentType="lab_test"
+          onSuccess={() => { setPayOrder(null); setPayItemName(""); setActionMessage("Payment completed successfully!"); }}
+          onClose={() => { setPayOrder(null); setPayItemName(""); }}
+        />
       )}
     </div>
   );

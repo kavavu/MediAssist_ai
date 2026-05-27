@@ -10,6 +10,7 @@ SECURITY NOTES:
 - All connections MUST provide a valid JWT token on connect
 - Room joins are validated against DB (user must be part of consultation)
 - All handlers are wrapped in try/except to prevent crashes
+- Disconnect cleanup is defensive against missing session data
 
 NOTE: No business logic here. Emissions are done via emitters.py from the service layer.
 """
@@ -103,7 +104,10 @@ def handle_connect():
 
     except Exception as e:
         logger.error(f"[Socket] Connection rejected for {sid}: {e}")
-        disconnect(sid)
+        try:
+            disconnect(sid)
+        except Exception:
+            pass
 
 
 @socketio.on("disconnect")
@@ -187,7 +191,10 @@ def handle_authenticate(data):
     except Exception as e:
         logger.error(f"[Socket] Auth failed for {sid}: {e}")
         _emit_error("Authentication failed: invalid token")
-        disconnect(sid)
+        try:
+            disconnect(sid)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,18 @@ Database can be switched to PostgreSQL by setting DATABASE_URL.
 """
 import os
 from datetime import timedelta
+from pathlib import Path
+
+# Auto-load .env file from backend/ or project root
+from dotenv import load_dotenv
+_env_paths = [
+    Path(__file__).parent / ".env",
+    Path(__file__).parent.parent / ".env",
+]
+for _p in _env_paths:
+    if _p.exists():
+        load_dotenv(dotenv_path=_p)
+        break
 
 
 # --- Base settings used in all environments ---
@@ -15,13 +27,14 @@ class BaseConfig:
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
     SQLALCHEMY_DATABASE_URI = os.getenv(
         "DATABASE_URL",
-        # Start with SQLite for development; structure allows PostgreSQL migration.
-        "sqlite:///mediassist.db",
+        # Use absolute path to backend/instance for SQLite
+        "sqlite:///../instance/mediassist.db",
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-change-me")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
+    MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5 MB file upload limit
 
 
 class DevelopmentConfig(BaseConfig):
