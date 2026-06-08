@@ -3,6 +3,11 @@ Application configuration for different environments (development, testing, prod
 
 Uses environment variables when set; otherwise falls back to safe defaults.
 Database can be switched to PostgreSQL by setting DATABASE_URL.
+
+SECURITY NOTE:
+- SECRET_KEY and JWT_SECRET_KEY MUST be set via environment variables in production.
+- The app will refuse to start in production without strong secrets.
+- CORS origins should be restricted to your frontend domain in production.
 """
 import os
 from datetime import timedelta
@@ -24,7 +29,9 @@ for _p in _env_paths:
 class BaseConfig:
     """Base configuration shared across environments."""
 
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
+    # SECURITY: In production, these MUST come from environment variables.
+    # The app checks this at startup and refuses to run with weak secrets.
+    SECRET_KEY = os.getenv("SECRET_KEY", "")
     SQLALCHEMY_DATABASE_URI = os.getenv(
         "DATABASE_URL",
         # Use absolute path to backend/instance for SQLite
@@ -32,9 +39,16 @@ class BaseConfig:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-change-me")
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5 MB file upload limit
+    
+    # CORS: In production, restrict to your frontend origin.
+    # Format: ["https://yourdomain.com", "https://app.yourdomain.com"]
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+    
+    # Socket.IO CORS origins (should match HTTP CORS)
+    SOCKET_CORS_ORIGINS = os.getenv("SOCKET_CORS_ORIGINS", "*")
 
 
 class DevelopmentConfig(BaseConfig):
@@ -51,9 +65,22 @@ class TestingConfig(BaseConfig):
 
 
 class ProductionConfig(BaseConfig):
-    """Production configuration (to be refined later)."""
+    """Production configuration with strict security checks."""
 
     DEBUG = False
+    
+    def __init__(self):
+        # SECURITY: Refuse to start in production without strong secrets
+        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+            raise RuntimeError(
+                "FATAL: SECRET_KEY must be set to a strong secret (32+ chars) in production. "
+                "Set the SECRET_KEY environment variable."
+            )
+        if not self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32:
+            raise RuntimeError(
+                "FATAL: JWT_SECRET_KEY must be set to a strong secret (32+ chars) in production. "
+                "Set the JWT_SECRET_KEY environment variable."
+            )
 
 
 # Map environment names to config classes

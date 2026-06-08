@@ -20,9 +20,10 @@ def get_dashboard_stats():
     resolved_consultations = Consultation.query.filter_by(status="resolved").count()
 
     total_payments = Payment.query.count()
-    completed_payments = Payment.query.filter_by(status="completed").count()
+    completed_payments = Payment.query.filter_by(status="success").count()
 
-    revenue_row = db.session.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar()
+    # Revenue analytics uses DISPLAYED amount (what the user sees), not the demo KSh 1
+    revenue_row = db.session.query(func.sum(Payment.displayed_amount)).filter(Payment.status == "success").scalar()
     total_revenue = float(revenue_row) if revenue_row is not None else 0.0
 
     total_appointments = Appointment.query.count()
@@ -144,16 +145,17 @@ def get_payment_analytics():
     payments = Payment.query.order_by(Payment.created_at.desc()).all()
     payment_list = [p.to_dict() for p in payments]
 
-    total_revenue = db.session.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar()
+    # Revenue analytics uses DISPLAYED amount for realistic reporting
+    total_revenue = db.session.query(func.sum(Payment.displayed_amount)).filter(Payment.status == "success").scalar()
     total_revenue = float(total_revenue) if total_revenue is not None else 0.0
 
-    completed = Payment.query.filter_by(status="completed").count()
+    completed = Payment.query.filter_by(status="success").count()
     failed = Payment.query.filter_by(status="failed").count()
-    pending = Payment.query.filter_by(status="pending").count()
+    pending = Payment.query.filter(Payment.status.in_(["pending", "processing"])).count()
 
     method_breakdown = []
-    methods = db.session.query(Payment.payment_method, func.count(Payment.id), func.sum(Payment.amount)) \
-        .filter(Payment.status == "completed") \
+    methods = db.session.query(Payment.payment_method, func.count(Payment.id), func.sum(Payment.displayed_amount)) \
+        .filter(Payment.status == "success") \
         .group_by(Payment.payment_method).all()
     for method, count, amount in methods:
         method_breakdown.append({

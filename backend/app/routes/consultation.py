@@ -42,10 +42,25 @@ def create_consultation():
     symptoms = (data.get("symptoms") or "").strip()
     if not symptoms:
         return jsonify({"error": "Symptoms are required."}), 400
+    if len(symptoms) > 2000:
+        return jsonify({"error": "Symptoms description is too long (max 2000 characters)."}), 400
 
     predicted_condition = (data.get("predicted_condition") or "").strip() or None
+    if predicted_condition and len(predicted_condition) > 255:
+        return jsonify({"error": "Predicted condition is too long (max 255 characters)."}), 400
+    
     message = (data.get("message") or "").strip() or None
+    if message and len(message) > 2000:
+        return jsonify({"error": "Message is too long (max 2000 characters)."}), 400
+    
     confidence_score = data.get("confidence_score")
+    if confidence_score is not None:
+        try:
+            confidence_score = float(confidence_score)
+            if not (0.0 <= confidence_score <= 1.0):
+                return jsonify({"error": "Confidence score must be between 0.0 and 1.0."}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid confidence score."}), 400
 
     preferred_doctor_id = data.get("preferred_doctor_id")
     if preferred_doctor_id:
@@ -103,6 +118,13 @@ def list_doctor_consultations():
 def respond_to_consultation(consultation_id):
     user = get_current_user()
     data = request.get_json(silent=True) or {}
+
+    # Validate input lengths to prevent abuse and database bloat
+    MAX_FIELD_LEN = 5000
+    for field in ["response", "acknowledgement", "advice", "tests", "urgency"]:
+        val = data.get(field)
+        if val and len(str(val)) > MAX_FIELD_LEN:
+            return jsonify({"error": f"{field} is too long (max {MAX_FIELD_LEN} characters)."}), 400
 
     has_any_field = any([
         data.get("response"),
@@ -206,6 +228,13 @@ def edit_response(consultation_id):
     user = get_current_user()
     data = request.get_json(silent=True) or {}
 
+    # Validate input lengths to prevent abuse and database bloat
+    MAX_FIELD_LEN = 5000
+    for field in ["acknowledgement", "advice", "tests", "urgency"]:
+        val = data.get(field)
+        if val and len(str(val)) > MAX_FIELD_LEN:
+            return jsonify({"error": f"{field} is too long (max {MAX_FIELD_LEN} characters)."}), 400
+
     has_any_field = any([
         data.get("acknowledgement"),
         data.get("advice"),
@@ -243,12 +272,15 @@ def send_followup(consultation_id):
     user = get_current_user()
     data = request.get_json(silent=True) or {}
     message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "Follow-up message is required."}), 400
+    if len(message) > 2000:
+        return jsonify({"error": "Message is too long (max 2000 characters)."}), 400
+    
     sender_role = data.get("sender_role") or user.role
     # Prevent role forgery: sender_role must match the authenticated user's role
     if sender_role != user.role:
         return jsonify({"error": "Sender role does not match your account role."}), 403
-    if not message:
-        return jsonify({"error": "Follow-up message is required."}), 400
     if sender_role not in ("doctor", "patient"):
         return jsonify({"error": "Invalid sender role."}), 400
 

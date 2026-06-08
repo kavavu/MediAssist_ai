@@ -1,7 +1,7 @@
 # MediAssist AI — Complete Project Documentation
 
 > **Last Updated:** 27 May 2026
-> **Status:** Production-Ready MVP with Real-Time Chat, AI Predictions, Load-Balanced Doctor Assignment, File Uploads, Payment Integration, Appointment Scheduling, and Complete UI/UX Polish
+> **Status:** Production-Ready MVP with Real-Time Chat, AI Predictions, Load-Balanced Doctor Assignment, File Uploads, M-Pesa Payment Integration, Appointment Scheduling, and Complete UI/UX Polish
 
 ---
 
@@ -19,21 +19,22 @@
 10. [Doctor Assignment Logic](#10-doctor-assignment-logic)
 11. [Real-Time Features](#11-real-time-features)
 12. [Two-Way Chat System](#12-two-way-chat-system)
-13. [Trust & Credibility](#13-trust--credibility)
-14. [Pages & Screens](#14-pages--screens)
-15. [Known Limitations & Suggestions](#15-known-limitations--suggestions)
-16. [Testing Results](#16-testing-results)
+13. [M-Pesa Payment Integration](#13-mpesa-payment-integration)
+14. [Trust & Credibility](#14-trust--credibility)
+15. [Pages & Screens](#15-pages--screens)
+16. [Known Limitations & Suggestions](#16-known-limitations--suggestions)
+17. [Testing Results](#17-testing-results)
 
 ---
 
 ## 1. Project Overview
 
-**MediAssist AI** is a full-stack healthcare web application that connects patients with doctors through an AI-assisted clinical workflow. Patients submit symptoms, receive AI-powered condition predictions, and get structured medical responses from verified doctors. The system includes real-time two-way messaging, lab test booking, medicine ordering, doctor marketplace with load balancing, and comprehensive analytics.
+**MediAssist AI** is a full-stack healthcare web application that connects patients with doctors through an AI-assisted clinical workflow. Patients submit symptoms, receive AI-powered condition predictions, and get structured medical responses from verified doctors. The system includes real-time two-way messaging, lab test booking, medicine ordering, doctor marketplace with load balancing, M-Pesa payment integration, appointment scheduling, and comprehensive analytics.
 
 ### Core Value Proposition
-- **For Patients:** Quick AI symptom analysis + transparent doctor selection + direct access to verified doctors + structured medical advice
+- **For Patients:** Quick AI symptom analysis + transparent doctor selection + direct access to verified doctors + structured medical advice + M-Pesa payments + appointment booking
 - **For Doctors:** Organized patient queue with severity prioritization + AI-assisted response generation + real-time chat + workload analytics
-- **For Platform:** Scalable specialization-based routing with load balancing + clean audit trails + trust-building features
+- **For Platform:** Scalable specialization-based routing with load balancing + clean audit trails + trust-building features + revenue analytics
 
 ---
 
@@ -47,6 +48,7 @@
 | Migrations | Flask-Migrate (Alembic) |
 | Authentication | JWT (flask-jwt-extended) |
 | ML Model | scikit-learn (Random Forest classifier) |
+| Payment API | Safaricom Daraja M-Pesa API |
 | CORS | flask-cors |
 
 ### Frontend
@@ -56,7 +58,7 @@
 | Styling | Tailwind CSS v4 |
 | Routing | react-router-dom |
 | HTTP Client | Axios |
-| Icons | Emoji + SVG |
+| Icons | Lucide React |
 
 ### DevOps
 | Component | Technology |
@@ -64,6 +66,7 @@
 | Build Tool | Vite |
 | Proxy | Vite dev server proxies `/api` → `localhost:5000` |
 | Package Manager | npm (frontend), pip (backend) |
+| Tunnel | ngrok (for M-Pesa callbacks) |
 
 ---
 
@@ -85,22 +88,30 @@
 └─────────────────┘    └──────────────────┘    └─────────────────┘
         │
         ▼
-┌─────────────────┐    ┌──────────────────┐
-│  Book Lab Tests │    │  Order Medicines │
-│  (if advised)   │    │  (if prescribed) │
-└─────────────────┘    └──────────────────┘
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│  Book Lab Tests │    │  Order Medicines │    │  Pay via M-Pesa │
+│  (if advised)   │    │  (if prescribed) │    │  (KSh 1 demo)   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                                        │
+                                                        ▼
+                                               ┌─────────────────┐
+                                               │  Book Appointment│
+                                               │  (with doctor)   │
+                                               └─────────────────┘
 ```
 
 **Detailed Steps:**
 1. **Register/Login** → Patient creates account (name, email, password, role="patient")
 2. **Submit Symptoms** → Types symptoms in natural language (e.g., "headache, fever, body aches")
-3. **AI Analysis** → ML model predicts top 3 conditions with confidence scores
+3. **AI Analysis** → Hybrid clinical engine predicts top 3 conditions with confidence scores
 4. **Doctor Selection** → Patient sees ALL verified doctors with availability, workload, and specialization. Can override the AI-recommended doctor.
 5. **Consultation Created** → System assigns priority (LOW/MEDIUM/HIGH) based on symptom severity keywords. Doctor load is incremented.
 6. **Wait for Response** → Patient sees consultation in dashboard with "pending" status
 7. **Doctor Responds** → Patient receives structured response (Acknowledgement, Advice, Tests, Urgency)
 8. **Two-Way Chat** → Patient can message doctor for follow-up questions (until case resolved)
 9. **Book Labs/Order Meds** → Patient can browse and book lab tests or order medicines separately
+10. **Pay via M-Pesa** → Patient pays for services using Safaricom M-Pesa STK Push (demo mode: always KSh 1)
+11. **Book Appointment** → Patient can book appointments with doctors
 
 ### 3.2 Doctor Flow
 
@@ -159,17 +170,25 @@ backend/
 │   │   ├── medicine.py          # Medicine catalog
 │   │   ├── order.py             # Lab/medicine orders
 │   │   ├── appointment.py       # Appointments
+│   │   ├── payment.py           # Payment records with M-Pesa
+│   │   ├── review.py            # Doctor reviews
 │   │   └── patient_profile.py   # Extended patient data
 │   ├── routes/
 │   │   ├── auth.py              # Login/register
 │   │   ├── consultation.py      # CRUD + chat + history + doctor preview/stats/recommend
 │   │   ├── doctor.py            # Doctor-only routes
 │   │   ├── patient.py           # Patient-only routes
-│   │   └── symptoms.py          # AI prediction endpoint
+│   │   ├── symptoms.py          # AI prediction endpoint
+│   │   ├── payment.py           # M-Pesa payment endpoints
+│   │   ├── appointment.py       # Appointment booking
+│   │   ├── review.py            # Doctor reviews
+│   │   └── upload.py            # File uploads
 │   ├── services/
 │   │   ├── consultation_service.py  # Business logic (load balancing, history, stats)
 │   │   ├── auth_service.py          # Auth helpers
 │   │   ├── prediction_service.py    # ML wrapper
+│   │   ├── payment_service.py       # Payment processing
+│   │   ├── mpesa_service.py         # M-Pesa Daraja API integration
 │   │   └── order_service.py         # Order processing
 │   ├── utils/
 │   │   ├── symptom_utils.py     # Normalization + AI insights + response generation
@@ -178,8 +197,11 @@ backend/
 │   │   └── seed.py              # Seed data (doctors, lab tests, medicines)
 │   └── ml/
 │       ├── symptom_model.py     # Model loader/predictor (top-k + spell correction)
-│       ├── train_model.py       # Training script
-│       └── artifacts/           # Saved model + valid symptoms
+│       ├── clinical/engine.py   # Hybrid Clinical Prediction Engine
+│       ├── train_model.py       # Training script (generic dataset)
+│       ├── train_tropical_model.py # Training script (tropical diseases)
+│       ├── generate_tropical_dataset.py # Synthetic dataset generator
+│       └── artifacts/           # Saved models + valid symptoms
 ├── config.py                    # Environment config
 ├── run.py                       # Entry point
 └── migrations/                  # Alembic migrations
@@ -203,20 +225,31 @@ frontend/src/
 ├── main.jsx                     # Entry point
 ├── index.css                    # Tailwind + custom theme
 ├── components/
-│   └── NavBar.jsx               # Top navigation (role-aware)
+│   ├── NavBar.jsx               # Top navigation (role-aware)
+│   ├── PaymentModal.jsx         # M-Pesa payment modal with STK Push
+│   ├── Toast.jsx                # Toast notification item
+│   ├── ToastProvider.jsx        # Global toast context
+│   ├── Skeleton.jsx             # Skeleton loaders
+│   ├── EmptyState.jsx           # Reusable empty state
+│   ├── AnimatedModal.jsx        # Modal with animations
+│   └── FileUploadZone.jsx       # Drag-drop file upload
 ├── pages/
 │   ├── LoginPage.jsx            # Patient/doctor login
-│   ├── LoginPage.css            # Custom login styles
 │   ├── RegisterPage.jsx         # Registration with specialization
 │   ├── PatientDashboard.jsx     # Patient dashboard + chat modal + history
 │   ├── DoctorDashboard.jsx      # 2-panel clinical interface + inline chat + edit response
 │   ├── SubmitSymptomsPage.jsx   # Symptom input + doctor selection marketplace
-│   ├── LabTestsPage.jsx         # Lab test catalog + booking
-│   └── MedicinesPage.jsx        # Medicine catalog + ordering
+│   ├── LabTestsPage.jsx         # Lab test catalog + booking + payment
+│   ├── MedicinesPage.jsx        # Medicine catalog + ordering + payment
+│   ├── AppointmentsPage.jsx     # Appointment booking + payment
+│   └── AdminDashboard.jsx       # Admin analytics + doctor management + payments
 └── services/
     ├── api.js                   # Axios instance with JWT
     ├── auth.js                  # Auth API calls
-    └── consultation.js          # Consultation API calls (+ doctors preview/stats/recommend)
+    ├── consultation.js          # Consultation API calls
+    ├── payment.js               # Payment API calls
+    ├── appointment.js           # Appointment API calls
+    └── review.js                # Review API calls
 ```
 
 ### 5.2 Route Structure
@@ -228,7 +261,9 @@ frontend/src/
 | `/patient/submit-symptoms` | Patient | SubmitSymptomsPage |
 | `/patient/lab-tests` | Patient | LabTestsPage |
 | `/patient/medicines` | Patient | MedicinesPage |
+| `/patient/appointments` | Patient | AppointmentsPage |
 | `/doctor/dashboard` | Doctor | DoctorDashboard |
+| `/admin/dashboard` | Admin | AdminDashboard |
 
 ### 5.3 State Management
 - **Local component state** via `useState`
@@ -261,6 +296,12 @@ frontend/src/
 ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
 │  lab_tests  │       │  medicines  │       │   orders    │
 │             │       │             │       │             │
+└─────────────┘       └─────────────┘       └─────────────┘
+       │
+       ▼
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│ appointments│       │   payments  │       │   reviews   │
+│             │       │  (M-Pesa)   │       │             │
 └─────────────┘       └─────────────┘       └─────────────┘
 ```
 
@@ -304,6 +345,26 @@ frontend/src/
 | responded_at | DateTime | |
 | resolved_at | DateTime | |
 
+#### `payments` (M-Pesa Integration)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer PK | |
+| user_id | FK → users | |
+| appointment_id | FK → appointments | Nullable |
+| order_id | FK → orders | Nullable |
+| amount | Numeric(10,2) | Actual charged amount (KSh 1 in demo) |
+| displayed_amount | Numeric(10,2) | Original price shown to user |
+| payment_method | String(32) | M-Pesa / Card / Cash |
+| transaction_reference | String(128) | M-Pesa CheckoutRequestID |
+| merchant_request_id | String(128) | M-Pesa MerchantRequestID |
+| status | String(32) | pending / processing / success / failed / cancelled |
+| phone_number | String(16) | Normalized 254XXXXXXXXX |
+| mpesa_receipt_number | String(64) | M-Pesa receipt |
+| failure_reason | String(255) | Error description |
+| paid_at | DateTime | Success timestamp |
+| created_at | DateTime | |
+| updated_at | DateTime | |
+
 #### `followups` (Chat Messages)
 | Column | Type | Notes |
 |--------|------|-------|
@@ -337,9 +398,32 @@ frontend/src/
 |--------|------|-------|
 | id | Integer PK | |
 | user_id | FK → users | |
-| order_type | String(32) | lab_test / medicine |
+| item_type | String(32) | lab_test / medicine |
 | item_id | Integer | |
-| status | String(32) | |
+| total_amount | Numeric(10,2) | |
+| payment_status | String(32) | pending / paid |
+| created_at | DateTime | |
+
+#### `appointments`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer PK | |
+| patient_id | FK → users | |
+| doctor_id | FK → users | |
+| appointment_date | Date | |
+| appointment_time | String(16) | |
+| status | String(32) | scheduled / completed / cancelled |
+| notes | Text | |
+| created_at | DateTime | |
+
+#### `reviews`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer PK | |
+| patient_id | FK → users | |
+| doctor_id | FK → users | |
+| rating | Integer | 1-5 stars |
+| comment | Text | |
 | created_at | DateTime | |
 
 #### `file_attachments`
@@ -410,19 +494,15 @@ frontend/src/
 | GET | `/api/upload/file/<id>` | JWT | Download/serve a file |
 | DELETE | `/api/upload/file/<id>` | JWT | Delete a file (uploader or doctor only) |
 
-### 7.7 Admin Routes
+### 7.7 Payment Routes (M-Pesa)
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/admin/dashboard` | JWT + admin | Platform analytics |
-| GET | `/api/admin/doctors` | JWT + admin | List all doctors |
-| POST | `/api/admin/doctors/<id>/verify` | JWT + admin | Verify doctor |
-| POST | `/api/admin/doctors/<id>/unverify` | JWT + admin | Unverify doctor |
-| POST | `/api/admin/doctors/<id>/availability` | JWT + admin | Toggle doctor availability |
-| GET | `/api/admin/users` | JWT + admin | List all users |
-| GET | `/api/admin/patients` | JWT + admin | List all patients |
-| GET | `/api/admin/consultations` | JWT + admin | List all consultations |
-| GET | `/api/admin/payments` | JWT + admin | List all payments |
-| GET | `/api/admin/reviews` | JWT + admin | List all reviews |
+| POST | `/api/payments/create` | JWT | Create a payment record |
+| POST | `/api/payments/<id>/stk-push` | JWT | Initiate M-Pesa STK Push |
+| GET | `/api/payments/<id>/status` | JWT | Poll payment status |
+| POST | `/api/payments/<id>/complete` | JWT | Legacy simulation complete |
+| GET | `/api/payments/my-payments` | JWT | Get user's payment history |
+| POST | `/api/payments/mpesa/callback` | — | M-Pesa Daraja callback endpoint |
 
 ### 7.8 Appointment Routes
 | Method | Endpoint | Auth | Description |
@@ -433,56 +513,107 @@ frontend/src/
 | GET | `/api/appointments/doctor` | JWT + doctor | Doctor's appointments |
 | POST | `/api/appointments/<id>/cancel` | JWT | Cancel an appointment |
 
-### 7.9 Payment Routes
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/payments/create` | JWT | Create a payment |
-| POST | `/api/payments/<id>/complete` | JWT | Complete a payment |
-| GET | `/api/payments/my-payments` | JWT | Get user's payments |
-
-### 7.10 Review Routes
+### 7.9 Review Routes
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | POST | `/api/reviews/create` | JWT + patient | Create a review |
 | GET | `/api/reviews/doctor/<id>` | JWT | Get doctor's reviews |
 | GET | `/api/reviews/doctor/<id>/summary` | JWT | Get doctor's review summary |
 
+### 7.10 Admin Routes
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/admin/dashboard` | JWT + admin | Platform analytics |
+| GET | `/api/admin/doctors` | JWT + admin | List all doctors |
+| POST | `/api/admin/doctors/<id>/verify` | JWT + admin | Verify doctor |
+| POST | `/api/admin/doctors/<id>/unverify` | JWT + admin | Unverify doctor |
+| POST | `/api/admin/doctors/<id>/availability` | JWT + admin | Toggle doctor availability |
+| GET | `/api/admin/users` | JWT + admin | List all users |
+| GET | `/api/admin/patients` | JWT + admin | List all patients |
+| GET | `/api/admin/consultations` | JWT + admin | List all consultations |
+| GET | `/api/admin/payments` | JWT + admin | Payment analytics |
+| GET | `/api/admin/reviews` | JWT + admin | Review analytics |
+
 ---
 
 ## 8. AI/ML System
 
-### 8.1 Model Details
-- **Algorithm:** Random Forest Classifier (scikit-learn)
-- **Training Data:** 132 symptoms → 41 diseases (from Kaggle dataset)
-- **Accuracy:** 97.6% (on test set)
-- **Output:** Top 3 predicted conditions with confidence scores
-- **Features:** Spell correction via fuzzy matching (`difflib.get_close_matches`)
-- **Caching:** Model loaded once and cached in memory on first use
+### 8.1 Hybrid Clinical Prediction Engine
 
-### 8.2 Prediction Flow
+The symptom checker uses a **hybrid architecture** combining rule-based clinical scoring with machine learning:
+
+```
+User Input → Advanced Normalization → Symptom Extraction →
+    → Rule-Based Weighted Scoring (PRIMARY) →
+    → ML Fallback (supporting) →
+    → Confidence Calibration →
+    → Red Flag Detection →
+    → Top-3 Ranking + Clinical Insights → API Response
+```
+
+### 8.2 Disease Knowledge Base (15 Diseases)
+
+| Disease | Severity | Category |
+|---------|----------|----------|
+| Malaria | HIGH | infectious |
+| Typhoid | HIGH | infectious |
+| Dengue | HIGH | infectious |
+| Pneumonia | HIGH | respiratory |
+| Flu | MEDIUM | respiratory |
+| COVID-19 | MEDIUM | respiratory |
+| Gastroenteritis | MEDIUM | gastrointestinal |
+| Food Poisoning | MEDIUM | gastrointestinal |
+| Tuberculosis | HIGH | infectious |
+| Asthma | MEDIUM | respiratory |
+| UTI | MEDIUM | urinary |
+| Chickenpox | LOW | infectious |
+| Common Cold | LOW | respiratory |
+| Meningitis | HIGH | neurological |
+| Diabetes Warning | MEDIUM | endocrine |
+
+### 8.3 Symptom Weighting System
+
+Each disease has symptoms weighted 1-5:
+- **5** = Critical/pathognomonic (defining symptom)
+- **4** = Core symptom
+- **3** = Common symptom
+- **2** = Supporting symptom
+- **1** = Rare symptom
+
+### 8.4 Prediction Flow
+
 ```
 Patient inputs: "fever, headache, joint pain"
         │
         ▼
 ┌─────────────────┐
 │ Text Parsing    │ → Split by commas/spaces, normalize
+│ + Aliases       │ → Handle misspellings, Swahili, slang
+│ + Fuzzy Match   │ → difflib.get_close_matches (65% cutoff)
 └─────────────────┘
         │
         ▼
 ┌─────────────────┐
-│ Spell Correction│ → Fuzzy match against 132 valid symptoms
+│ Symptom Vector  │ → Canonical symptoms extracted
+│ Extraction      │ → Multi-word phrases, trigrams, bigrams
 └─────────────────┘
         │
         ▼
 ┌─────────────────┐
-│ Symptom Vector  │ → Binary vector (132 features)
-│ Construction    │ → 1 = symptom present, 0 = absent
+│ Rule-Based      │ → Weighted symptom scoring per disease
+│ Scoring         │ → raw_score = matched_weight / denominator
 └─────────────────┘
         │
         ▼
 ┌─────────────────┐
-│ Random Forest   │ → Predicts disease probabilities
-│ Classifier      │
+│ Confidence      │ → Calibrate based on symptom count,
+│ Calibration     │ → red flags, missing core symptoms
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ ML Fallback     │ → RandomForest (if clinical < 0.50)
+│ (Optional)      │ → Dynamic blending weights
 └─────────────────┘
         │
         ▼
@@ -491,11 +622,40 @@ Patient inputs: "fever, headache, joint pain"
 └─────────────────┘
 ```
 
-### 8.3 Model Training
-- Training script: `backend/app/ml/train_model.py`
-- Saved model: `backend/app/ml/artifacts/symptom_model.joblib`
-- Valid symptoms: `backend/app/ml/artifacts/valid_symptoms.json`
-- Auto-trains on first run if no saved model exists
+### 8.5 ML Model Details
+
+#### Tropical Disease Model (NEW)
+- **Algorithm:** Random Forest Classifier (scikit-learn)
+- **Training Data:** 1,800 synthetic cases → 15 tropical diseases
+- **Features:** 65 canonical symptoms
+- **Accuracy:** 99.78% (on 450 test cases)
+- **Output:** Top 3 predicted conditions with confidence scores
+- **File:** `symptom_model_tropical.joblib`
+
+#### Generic Model (Legacy)
+- **Algorithm:** Random Forest Classifier
+- **Training Data:** 4,920 cases → 41 diseases (Kaggle dataset)
+- **Features:** 132 symptoms
+- **Accuracy:** 97.6%
+- **File:** `symptom_model.joblib`
+
+### 8.6 Dynamic Blending Weights
+
+When ML fallback activates (clinical confidence < 0.50):
+
+| Clinical Confidence | Clinical Weight | ML Weight |
+|---------------------|-----------------|-----------|
+| < 0.10 | 40% | 60% |
+| < 0.20 | 60% | 40% |
+| < 0.35 | 75% | 25% |
+| ≥ 0.35 | 85% | 15% |
+
+### 8.7 Model Training
+- Tropical training script: `backend/app/ml/train_tropical_model.py`
+- Generic training script: `backend/app/ml/train_model.py`
+- Tropical model: `backend/app/ml/artifacts/symptom_model_tropical.joblib`
+- Generic model: `backend/app/ml/artifacts/symptom_model.joblib`
+- Valid symptoms: `backend/app/ml/artifacts/valid_symptoms_tropical.json`
 
 ---
 
@@ -506,31 +666,37 @@ Patients type symptoms in inconsistent ways:
 - `paininthejoint` → should be `Joint Pain`
 - `stomachache` → should be `Abdominal Pain`
 - `feverish` → should be `Fever`
+- `homa kali` → should be `High Fever` (Swahili)
 
 ### 9.2 Solution
-Comprehensive alias mapping in `backend/app/utils/symptom_utils.py`:
+Comprehensive alias mapping with 200+ entries:
 
 ```python
 _SYMPTOM_ALIASES = {
-    "paininthejoint": "Joint Pain",
-    "jointpain": "Joint Pain",
-    "stomachache": "Abdominal Pain",
-    "stomach ache": "Abdominal Pain",
-    "feverish": "Fever",
-    "high temp": "Fever",
-    "coughing": "Cough",
-    "nauseous": "Nausea",
-    # ... 50+ aliases
+    # Misspellings
+    "vomitting": "vomiting",
+    "diarhea": "diarrhea",
+    # Slang
+    "puking": "vomiting",
+    "throwing up": "vomiting",
+    # Swahili
+    "homa kali": "high fever",
+    "tumbo kuumwa": "abdominal pain",
+    "kuchoka sana": "fatigue",
+    "shingo ngumu": "stiff neck",
+    # ... 200+ more
 }
 ```
 
 ### 9.3 Normalization Process
-1. Split by commas, semicolons, or newlines
-2. Strip whitespace, lowercase
-3. Check alias dictionary
-4. If no alias: capitalize each word (`"headache"` → `"Headache"`)
-5. Deduplicate
-6. Return comma-separated clean string
+1. Extract multi-word phrases first (longest match wins)
+2. Split by commas/semicolons/newlines
+3. Strip whitespace, lowercase
+4. Check alias dictionary (trigram → bigram → unigram)
+5. Fuzzy match against canonical symptoms (65% cutoff)
+6. Remove stop words
+7. Deduplicate
+8. Return canonical symptom list
 
 ### 9.4 AI Response Generation
 The system auto-generates structured response components:
@@ -660,9 +826,110 @@ Based on symptom/condition keywords:
 
 ---
 
-## 13. Trust & Credibility
+## 13. M-Pesa Payment Integration
 
-### 13.1 Implemented Trust Features
+### 13.1 Architecture
+
+```
+Patient clicks Pay
+        │
+        ▼
+┌─────────────────┐
+│ Create Payment  │ → Record created with displayed_amount
+│ Record          │ → amount = KSh 1 (demo mode)
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Enter Phone     │ → Normalize to 254XXXXXXXXX
+│ Number          │ → Validate Kenyan format
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Initiate STK    │ → POST to Safaricom Daraja API
+│ Push            │ → Consumer Key + Secret → OAuth token
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Patient Receives│ → M-Pesa popup on phone
+│ STK Push        │ → Enter PIN 0000 (sandbox)
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Safaricom Sends │ → POST to /api/payments/mpesa/callback
+│ Callback        │ → Verify + update transaction
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Frontend Polls  │ → GET /api/payments/<id>/status
+│ Status          │ → Every 5 seconds
+└─────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│ Show Receipt    │ → Transaction ID, M-Pesa receipt,
+│                 │ → Item, Amount, Timestamp, Status
+└─────────────────┘
+```
+
+### 13.2 Demo Safety Mode
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `DEMO_PAYMENT_MODE` | `true` | Always charge KSh 1 |
+| Displayed price | Real price (e.g., KSh 1200) | UI shows actual cost |
+| STK Push amount | KSh 1 | Safaricom only charges 1 |
+| Database `amount` | 1.00 | Actual transaction |
+| Database `displayed_amount` | 1200.00 | For analytics/receipts |
+
+### 13.3 Phone Number Normalization
+
+| Input | Output |
+|-------|--------|
+| `0712345678` | `254712345678` |
+| `+254712345678` | `254712345678` |
+| `254712345678` | `254712345678` |
+
+### 13.4 Payment Status Tracking
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Payment record created, not yet initiated |
+| `processing` | STK Push sent, waiting for user PIN |
+| `success` | Callback received, payment confirmed |
+| `failed` | STK Push failed or user declined |
+| `cancelled` | User cancelled or timed out |
+
+### 13.5 Environment Variables
+
+```env
+MPESA_CONSUMER_KEY=your-consumer-key
+MPESA_CONSUMER_SECRET=your-consumer-secret
+MPESA_SHORTCODE=174379
+MPESA_PASSKEY=bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919
+MPESA_CALLBACK_URL=https://your-ngrok-url/api/payments/mpesa/callback
+MPESA_ENV=sandbox
+DEMO_PAYMENT_MODE=true
+MPESA_DEFAULT_PHONE=254795058994
+```
+
+### 13.6 Admin Revenue Analytics
+
+Admin dashboard shows:
+- Total revenue (using `displayed_amount` for realistic reporting)
+- Completed/failed/pending transaction counts
+- Payment method breakdown
+- Revenue by payment method
+
+---
+
+## 14. Trust & Credibility
+
+### 14.1 Implemented Trust Features
 | Feature | Implementation |
 |---------|---------------|
 | **AI Disclaimer** | "AI-assisted predictions. Not a final medical diagnosis." — shown on both dashboards |
@@ -670,12 +937,14 @@ Based on symptom/condition keywords:
 | **Doctor Availability** | Green/gray dot showing online/offline status |
 | **Doctor Workload** | Current patient load visible to patients |
 | **Doctor Specialization** | Always displayed with doctor name |
-| **Timestamp with Timezone** | Full localized timestamp (e.g., "Apr 23, 2026, 06:45 PM GMT+3") |
+| **Timestamp with Timezone** | Full localized timestamp |
 | **Structured Responses** | Doctor responses have 4 mandatory fields, not free text |
 | **Confidence Scores** | AI predictions show % confidence with color coding |
 | **Severity System** | Color-coded badges (Green/Yellow/Red) with clinical meaning |
+| **M-Pesa Security** | Encrypted transaction indicators, secure payment modal |
+| **Payment Receipts** | Professional receipt with transaction ID, M-Pesa receipt number |
 
-### 13.2 Severity Color Coding
+### 14.2 Severity Color Coding
 | Severity | Color | Meaning | Action |
 |----------|-------|---------|--------|
 | LOW | Green 🟢 | Mild symptoms | Self-care suggested |
@@ -686,9 +955,9 @@ Applied to: badges, card border tints, background tints, urgency boxes
 
 ---
 
-## 14. Pages & Screens
+## 15. Pages & Screens
 
-### 14.1 Login Page (`/login`)
+### 15.1 Login Page (`/login`)
 - Gradient background with radial accents
 - Centered card with medical cross icon
 - Email + Password inputs with focus animations
@@ -696,14 +965,14 @@ Applied to: badges, card border tints, background tints, urgency boxes
 - Loading spinner on submit
 - Auto-redirects by role after login
 
-### 14.2 Register Page (`/register`)
+### 15.2 Register Page (`/register`)
 - Centered card layout
 - Fields: Full Name, Email, Password, Role (dropdown)
 - If Role = Doctor: shows Specialization dropdown (11 options)
 - Styled error/success alert boxes
 - "Already have an account?" link
 
-### 14.3 Patient Dashboard (`/patient/dashboard`)
+### 15.3 Patient Dashboard (`/patient/dashboard`)
 - **Header:** Title + consultation count
 - **Disclaimer banner:** AI not a diagnosis
 - **Consultations list:** Expandable cards with:
@@ -715,7 +984,7 @@ Applied to: badges, card border tints, background tints, urgency boxes
 - **Action buttons:** "💬 Message Doctor" (if active), "View Full History"
 - **Prediction History table:** Date, Symptoms, Predicted, Confidence
 
-### 14.4 Doctor Dashboard (`/doctor/dashboard`)
+### 15.4 Doctor Dashboard (`/doctor/dashboard`)
 - **Analytics header:** 4 stat cards (Patients Today, Pending, High Severity, Avg Response Time)
 - **New case badge:** Red pulse indicator
 - **Disclaimer banner**
@@ -732,15 +1001,18 @@ Applied to: badges, card border tints, background tints, urgency boxes
     - Action buttons: Edit Response, Open Chat, View History, Mark Resolved
     - Inline chat panel (when opened)
 
-### 14.5 Submit Symptoms Page (`/patient/submit-symptoms`)
+### 15.5 Submit Symptoms Page (`/patient/submit-symptoms`)
 - Header with description
 - Symptom textarea with placeholder
+- Common symptom chips (English + Swahili)
 - Analyze button with loading spinner
 - **Results section:**
-  - 3 prediction cards with confidence badges and progress bars
-  - "Top Match" label on highest confidence
-  - Recommendation banner
-  - Disclaimer
+  - Primary prediction with confidence circle
+  - Top 3 predictions with visual ranking bars
+  - Cleaned symptoms understood
+  - Urgency guidance
+  - AI Clinical Insight panel
+  - Recommended diagnostic tests
 - **Doctor Selection section (Marketplace):**
   - AI-recommended doctor highlighted
   - Grid of ALL verified doctor cards with avatar, name, specialization, availability dot, workload
@@ -748,184 +1020,195 @@ Applied to: badges, card border tints, background tints, urgency boxes
   - Selected doctor banner
   - "Consult Doctor" button + "Go to Dashboard" button
 
-### 14.6 Lab Tests Page (`/patient/lab-tests`)
+### 15.6 Payment Modal
+- M-Pesa branded header with Safaricom green
+- Amount card showing real price
+- Phone number input with validation
+- Security indicator (encrypted transaction)
+- "Pay" button with M-Pesa branding
+- Processing states: STK sent → Waiting → Success/Failed
+- Success: Professional receipt with transaction details
+- Failure: Retry button + error message
+
+### 15.7 Lab Tests Page (`/patient/lab-tests`)
 - Header + description
 - Grid of test cards (2 columns on desktop)
-- Each card: Test name, description, price badge (primary color), "Book" button
+- Each card: Test name, description, price badge, "Book" button
+- After booking: Payment modal appears
 - Loading spinner while fetching
 - Empty state if no tests
 
-### 14.7 Medicines Page (`/patient/medicines`)
+### 15.8 Medicines Page (`/patient/medicines`)
 - Header + description
 - Grid of medicine cards (2 columns on desktop)
-- Each card: Medicine name, manufacturer, price badge, prescription required badge (red), stock level, "Order" button
+- Each card: Medicine name, manufacturer, price badge, prescription required badge, stock level, "Order" button
+- After ordering: Payment modal appears
 - Out-of-stock items: grayed out, disabled button
 - Loading spinner while fetching
 
+### 15.9 Appointments Page (`/patient/appointments`)
+- Header + description
+- Doctor selection dropdown
+- Date picker
+- Available time slots grid
+- Book button
+- After booking: Payment modal appears
+- List of existing appointments with status badges
+
+### 15.10 Admin Dashboard (`/admin/dashboard`)
+- **Analytics cards:** Total Users, Doctors, Patients, Revenue, Consultations, Appointments
+- **Doctor Management table:** Verify/unverify, toggle availability
+- **Consultation Overview:** All consultations with priority badges
+- **Payment Analytics:** Revenue breakdown, completed/failed/pending counts, method breakdown
+- **Review Analytics:** Average rating, top doctors, recent reviews
+
 ---
 
-## 15. Known Limitations & Suggestions
+## 16. Known Limitations & Suggestions
 
-### 15.1 Current Limitations
+### 16.1 Current Limitations
 
 | # | Limitation | Impact |
 |---|-----------|--------|
-| 1 | ~~No admin dashboard~~ | ✅ Implemented — full admin dashboard with KPIs, doctor management, payments, reviews |
-| 2 | ~~No doctor availability status toggle~~ | ✅ Implemented — admin can toggle doctor availability |
-| 3 | ~~No appointment scheduling~~ | ✅ Implemented — patients can book appointments with time slots |
-| 4 | ~~No payment integration~~ | ✅ Implemented — M-Pesa/Card/Cash payment flow with PaymentModal |
-| 5 | ~~No push notifications~~ | ✅ Implemented — toast notification system for user feedback |
-| 6 | ~~No file uploads~~ | ✅ Implemented — drag-drop file upload for images and PDFs |
-| 7 | ~~No doctor ratings/reviews~~ | ✅ Implemented — patients can leave star ratings and comments |
+| 1 | ~~No admin dashboard~~ | ✅ Implemented |
+| 2 | ~~No doctor availability status toggle~~ | ✅ Implemented |
+| 3 | ~~No appointment scheduling~~ | ✅ Implemented |
+| 4 | ~~No payment integration~~ | ✅ Implemented — M-Pesa STK Push |
+| 5 | ~~No push notifications~~ | ✅ Implemented — toast notification system |
+| 6 | ~~No file uploads~~ | ✅ Implemented |
+| 7 | ~~No doctor ratings/reviews~~ | ✅ Implemented |
 | 8 | **JWT key is short (28 bytes)** | Security warning — should be 32+ bytes |
 | 9 | **No email/SMS notifications** | No external notification system |
 | 10 | **SQLite for production** | Won't scale beyond a few concurrent users |
+| 11 | **M-Pesa sandbox only** | Real payments require production credentials |
+| 12 | **ngrok required for callbacks** | Callbacks need public URL |
 
-### 15.2 Architectural Suggestions (For ChatGPT Reasoning)
+### 16.2 Future Enhancements
 
-#### Suggestion 1: Admin Dashboard
-**Why needed:** As the platform scales beyond 5-10 doctors, manual management becomes impossible.
-**Features:**
-- Doctor management (approve, suspend, edit specializations)
-- Platform analytics (total consultations, revenue, response times)
-- Patient management (view history, flag abuse)
-- System configuration (severity keywords, specialization mapping)
+#### Suggestion 1: Production M-Pesa
+- Upgrade from sandbox to production Daraja API
+- Apply for Paybill/Till number
+- Remove `DEMO_PAYMENT_MODE` flag
+- Charge actual prices
 
 #### Suggestion 2: WebSocket-Based Real-Time
-**Current:** Polling every 5-15 seconds
-**Proposed:**
-- Socket.IO or native WebSockets for instant chat
+- Replace polling with Socket.IO
+- Instant chat messages
 - Push notifications for new consultations
 - Doctor "typing" indicators
-- Reduced server load vs polling
 
-#### Suggestion 3: Appointment Scheduling
-**Current:** Consultations are async (submit → wait for response)
-**Proposed:**
-- Doctor sets available time slots
-- Patient books video/voice call appointment
-- Calendar integration
-- Reminder notifications
+#### Suggestion 3: Video Consultations
+- Integrate WebRTC for video calls
+- Scheduled video appointments
+- Screen sharing for lab results
 
-#### Suggestion 4: ~~File Attachments~~ ✅ Implemented
-**Status:** Patients can upload images (JPG, PNG, GIF) and PDFs up to 5MB per file. Files are stored per-consultation with auth-protected access. Doctors can view patient uploads in the consultation detail panel.
+#### Suggestion 4: Mobile App
+- React Native or Flutter app
+- Push notifications
+- Offline symptom checker
 
-#### Suggestion 5: Payment Integration
-**Current:** Prices shown but no payment
-**Proposed:**
-- M-Pesa / Stripe integration for Kenya market
-- Doctor consultation fees
-- Lab test and medicine payments
-- Commission system for platform revenue
-
-#### Suggestion 6: Multi-Language Support
-**Current:** English only
-**Proposed:**
-- Swahili for Kenyan market
-- Symptom normalization in multiple languages
+#### Suggestion 5: Multi-Language Support
+- Full Swahili UI
+- Voice input for symptoms
 - Localized medical terminology
 
 ---
 
-## 16. Testing Results
+## 17. Testing Results
 
-### 16.1 Backend Tests (Manual)
+### 17.1 Backend Tests (Manual)
 | Test | Result |
 |------|--------|
 | App loads without errors | ✅ PASS |
-| All 9 database tables exist | ✅ PASS |
-| 6 seed doctors created | ✅ PASS |
-| 7 lab tests seeded | ✅ PASS |
-| 6 medicines seeded | ✅ PASS |
-| Symptom normalization works | ✅ PASS (`paininthejoint` → `Joint Pain`) |
+| All database tables exist | ✅ PASS |
+| Seed doctors created | ✅ PASS |
+| Lab tests seeded | ✅ PASS |
+| Medicines seeded | ✅ PASS |
+| Symptom normalization works | ✅ PASS |
 | AI insight generation works | ✅ PASS |
 | Doctor assignment by specialization | ✅ PASS |
 | Load balancing (least busy doctor) | ✅ PASS |
-| Priority assignment (MEDIUM for fever) | ✅ PASS |
+| Priority assignment | ✅ PASS |
 | Consultation creation | ✅ PASS |
 | Structured doctor response | ✅ PASS |
 | Two-way followup messages | ✅ PASS |
-| History timeline generation | ✅ PASS (4 items: created, responded, 2 followups) |
+| History timeline generation | ✅ PASS |
 | Doctor stats calculation | ✅ PASS |
-| Public doctor stats endpoint | ✅ PASS |
-| Doctor recommendation endpoint | ✅ PASS |
-| All 24 API routes registered | ✅ PASS |
 | File upload endpoints | ✅ PASS |
-| File attachment model | ✅ PASS |
+| M-Pesa STK Push initiation | ✅ PASS |
+| M-Pesa callback handling | ✅ PASS |
+| Payment status polling | ✅ PASS |
+| Appointment booking | ✅ PASS |
+| Review creation | ✅ PASS |
 
-### 16.2 Frontend Tests (Build)
+### 17.2 ML Model Tests
+| Test | Result |
+|------|--------|
+| Tropical model training | ✅ PASS (99.78% accuracy) |
+| Generic model loading | ✅ PASS (97.6% accuracy) |
+| Clinical engine predictions | ✅ PASS |
+| ML fallback activation | ✅ PASS |
+| Dynamic blending | ✅ PASS |
+| Swahili symptom handling | ✅ PASS |
+| Red flag detection | ✅ PASS |
+| Confidence calibration | ✅ PASS |
+
+### 17.3 Frontend Tests (Build)
 | Test | Result |
 |------|--------|
 | Production build succeeds | ✅ PASS |
 | No compilation errors | ✅ PASS |
-| CSS bundle: 55.63 KB | ✅ PASS |
-| JS bundle: 410.65 KB | ✅ PASS |
+| CSS bundle optimized | ✅ PASS |
+| JS bundle optimized | ✅ PASS |
 | Toast notification system | ✅ PASS |
 | Skeleton loaders | ✅ PASS |
 | Empty state components | ✅ PASS |
-| Split-screen auth pages | ✅ PASS |
-| Mobile responsive NavBar | ✅ PASS |
+| Payment modal UI | ✅ PASS |
+| Mobile responsive | ✅ PASS |
 
-### 16.3 Integration Tests (End-to-End)
+### 17.4 Integration Tests (End-to-End)
 | Test | Result |
 |------|--------|
 | Patient registers → logs in → submits symptoms → gets predictions | ✅ PASS |
-| Patient sees doctor marketplace with availability + workload | ✅ PASS |
+| Patient sees doctor marketplace | ✅ PASS |
 | Patient selects doctor → creates consultation | ✅ PASS |
 | Doctor logs in → sees consultation in queue | ✅ PASS |
 | Doctor submits structured response | ✅ PASS |
 | Patient sees response in dashboard | ✅ PASS |
 | Patient sends chat message | ✅ PASS |
 | Doctor sees chat message | ✅ PASS |
-| Doctor replies in chat | ✅ PASS |
-| Doctor edits response | ✅ PASS |
-| Doctor marks case resolved | ✅ PASS |
-| Patient books lab test | ✅ PASS |
-| Patient orders medicine | ✅ PASS |
-| Patient uploads file to consultation | ✅ PASS |
-| Doctor views patient file attachments | ✅ PASS |
-| Toast notifications replace alerts | ✅ PASS |
+| Patient books lab test → pays via M-Pesa | ✅ PASS |
+| Patient orders medicine → pays via M-Pesa | ✅ PASS |
+| Patient books appointment → pays via M-Pesa | ✅ PASS |
+| Admin views payment analytics | ✅ PASS |
+| Patient leaves doctor review | ✅ PASS |
 
 ---
 
 ## Appendix A: File Inventory
 
-### Backend Files Modified/Created
-| File | Status | Description |
-|------|--------|-------------|
-| `backend/app/models/followup.py` | ✅ Created | Chat message model |
-| `backend/app/models/__init__.py` | ✅ Modified | Import order fix + FollowUp export |
-| `backend/app/models/user.py` | ✅ Modified | Added followups, is_available, current_load, is_verified |
-| `backend/app/models/consultation.py` | ✅ Modified | Added followups relationship + doctor availability fields |
-| `backend/app/routes/consultation.py` | ✅ Modified | +edit, +followup, +history, +doctors/preview, +doctors/stats, +doctors/recommend |
-| `backend/app/services/consultation_service.py` | ✅ Modified | +edit_response, +add_followup (two-way), +get_doctors_for_preview, +get_doctor_public_stats, +get_recommended_doctor, +find_best_doctor (load balancing) |
-| `backend/app/utils/symptom_utils.py` | ✅ Modified | +generate_acknowledgement, +generate_advice, +generate_suggested_tests, +generate_urgency |
-| `backend/app/utils/seed.py` | ✅ Modified | Seed doctors with is_verified=True, is_available=True, current_load=0 |
-| `backend/app/ml/symptom_model.py` | ✅ Modified | +predict_topk, +spell correction, +model caching |
-| `backend/app/models/file_attachment.py` | ✅ Created | FileAttachment model for consultation uploads |
-| `backend/app/routes/upload.py` | ✅ Created | Upload, list, serve, delete file endpoints |
-| `backend/config.py` | ✅ Modified | Added MAX_CONTENT_LENGTH (5MB) |
+### New Backend Files (M-Pesa + ML)
+| File | Description |
+|------|-------------|
+| `backend/app/services/mpesa_service.py` | M-Pesa Daraja API integration (STK Push, callback, query) |
+| `backend/app/services/payment_service.py` | Payment business logic with demo safety |
+| `backend/app/ml/clinical/engine.py` | Hybrid Clinical Prediction Engine |
+| `backend/app/ml/generate_tropical_dataset.py` | Synthetic tropical disease dataset generator |
+| `backend/app/ml/train_tropical_model.py` | Tropical disease RandomForest trainer |
+| `backend/app/ml/artifacts/symptom_model_tropical.joblib` | Trained tropical model (99.78% accuracy) |
+| `backend/app/ml/artifacts/valid_symptoms_tropical.json` | 65 canonical symptom names |
+| `backend/app/ml/datasets/Training_Tropical.csv` | 1,800 training samples |
+| `backend/app/ml/datasets/Testing_Tropical.csv` | 450 test samples |
 
-### Frontend Files Modified/Created
-| File | Status | Description |
-|------|--------|-------------|
-| `frontend/src/pages/DoctorDashboard.jsx` | ✅ Modified | 2-panel + inline chat + edit response + history + AI assist |
-| `frontend/src/pages/PatientDashboard.jsx` | ✅ Modified | Chat modal + message doctor button + history + prediction table |
-| `frontend/src/pages/SubmitSymptomsPage.jsx` | ✅ Modified | Doctor marketplace with availability, workload, recommendation |
-| `frontend/src/pages/RegisterPage.jsx` | ✅ Modified | Split-screen layout with password strength, role cards |
-| `frontend/src/pages/LoginPage.jsx` | ✅ Modified | Split-screen layout with trust badges, password toggle |
-| `frontend/src/pages/AuthPages.css` | ✅ Created | Shared auth page styles |
-| `frontend/src/components/NavBar.jsx` | ✅ Modified | Tailwind + active states + mobile hamburger menu |
-| `frontend/src/components/Toast.jsx` | ✅ Created | Toast notification item component |
-| `frontend/src/components/ToastProvider.jsx` | ✅ Created | Global toast context + useToast hook |
-| `frontend/src/components/Skeleton.jsx` | ✅ Created | Skeleton loaders (text, card, table, stats, pills) |
-| `frontend/src/components/EmptyState.jsx` | ✅ Created | Reusable empty state with icon + CTA |
-| `frontend/src/components/AnimatedModal.jsx` | ✅ Created | Modal wrapper with enter/exit animations |
-| `frontend/src/components/FileUploadZone.jsx` | ✅ Created | Drag-drop file upload with preview |
-| `frontend/src/services/upload.js` | ✅ Created | File upload API service |
-| `frontend/src/pages/LabTestsPage.jsx` | ✅ Modified | Grid layout with styled cards |
-| `frontend/src/pages/MedicinesPage.jsx` | ✅ Modified | Grid layout with stock/prescription badges |
-| `frontend/src/services/consultation.js` | ✅ Modified | +getDoctorsPreview, +getDoctorPublicStats, +getRecommendedDoctor |
+### New Frontend Files
+| File | Description |
+|------|-------------|
+| `frontend/src/components/PaymentModal.jsx` | M-Pesa payment modal with STK Push flow |
+| `frontend/src/services/payment.js` | Payment API service |
+| `frontend/src/services/appointment.js` | Appointment API service |
+| `frontend/src/services/review.js` | Review API service |
+| `frontend/src/pages/AdminDashboard.jsx` | Admin analytics dashboard |
+| `frontend/src/pages/AppointmentsPage.jsx` | Appointment booking page |
 
 ---
 

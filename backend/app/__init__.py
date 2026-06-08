@@ -3,8 +3,13 @@ MediAssist AI Flask app factory.
 
 create_app() builds the app: config, DB, JWT, ML model, routes, seed data.
 All API routes are under /api/ (e.g. /api/auth/login, /api/predict).
+
+SECURITY NOTES:
+- CORS origins are configurable via CORS_ORIGINS env var (default * for dev only)
+- Global error handlers catch unhandled exceptions and return JSON (no HTML stack traces)
+- JWT tokens expire after 1 hour for security
 """
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from backend.config import get_config
@@ -14,8 +19,15 @@ from .extensions import db, migrate, jwt
 def create_app():
     """Create and configure the Flask app. Called once when the server starts (see backend/run.py)."""
     app = Flask(__name__)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
-    app.config.from_object(get_config())
+    config = get_config()
+    app.config.from_object(config)
+    
+    # CORS: Use configured origins. In production, restrict to your frontend domain.
+    # Default "*" is only safe for development.
+    cors_origins = getattr(config, "CORS_ORIGINS", "*")
+    if isinstance(cors_origins, str) and cors_origins != "*":
+        cors_origins = [o.strip() for o in cors_origins.split(",")]
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}})
 
     _init_extensions(app)   # DB, migrations, JWT + load models
     _init_socketio(app)     # WebSocket support
@@ -23,6 +35,7 @@ def create_app():
     _register_blueprints(app)  # Auth, symptoms, patient, doctor routes
     _ensure_db_tables(app)   # Create tables if missing
     _seed_if_empty(app)      # Insert sample lab tests & medicines if empty
+    _register_error_handlers(app)  # Global error handlers for consistent JSON responses
 
     @app.get("/health")
     def health_check():
@@ -97,4 +110,36 @@ def _seed_if_empty(app: Flask) -> None:
     from .utils.seed import seed_catalog
     with app.app_context():
         seed_catalog()
+
+
+def _register_error_handlers(app: Flask) -> None:
+    """
+    Register global error handlers so the API always returns JSON.
+    Prevents Flask's default HTML error pages from leaking stack traces.
+    """
+    @app.errorhandler(400)
+    def bad_request(error):
+        return jsonify({"error": "Bad request", "message": str(error.description) if hasattr(error, "description") else "Invalid request"}), 400
+
+    @app.errorhandler(404)
+    def not_found(error):
+        return jsonify({"error": "Not found", "message": "The requested resource was not found"}), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(error):
+        return jsonify({"error": "Method not allowed", "message": "This HTTP method is not allowed for this endpoint"}), 405
+
+    @app.errorhandler(500)
+    def internal_error(error):
+        # Log the real error but don't expose it to the client
+        import logging
+        logging.getLogger(__name__).exception("Unhandled 500 error")
+        return jsonify({"error": "Internal server error", "message": "Something went wrong. Please try again later."}), 500
+
+    @app.errorhandler(Exception)
+    def unhandled_exception(error):
+        # Catch-all for any unhandled exception
+        import logging
+        logging.getLogger(__name__).exception("Unhandled exception")
+        return jsonify({"error": "Internal server error", "message": "Something went wrong. Please try again later."}), 500
 

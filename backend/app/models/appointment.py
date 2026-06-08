@@ -21,9 +21,9 @@ class Appointment(db.Model):
     )
     appointment_date = db.Column(db.Date, nullable=False)
     appointment_time = db.Column(db.String(16), nullable=False)
-    status = db.Column(db.String(32), nullable=False, default="scheduled")  # scheduled | completed | cancelled
+    status = db.Column(db.String(32), nullable=False, default="scheduled", index=True)  # scheduled | completed | cancelled
     notes = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
     patient = db.relationship("User", back_populates="appointments_as_patient", foreign_keys=[patient_id])
     doctor = db.relationship("User", back_populates="appointments_as_doctor", foreign_keys=[doctor_id])

@@ -37,17 +37,17 @@ class Consultation(db.Model):
     ai_risk_level = db.Column(db.String(32), nullable=True)
     ai_suggested_steps = db.Column(db.Text, nullable=True)
 
-    status = db.Column(db.String(32), nullable=False, default="pending")
-    priority = db.Column(db.String(32), nullable=False, default="LOW")
+    status = db.Column(db.String(32), nullable=False, default="pending", index=True)
+    priority = db.Column(db.String(32), nullable=False, default="LOW", index=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     responded_at = db.Column(db.DateTime, nullable=True)
     resolved_at = db.Column(db.DateTime, nullable=True)
 
     patient = db.relationship("User", foreign_keys=[patient_id], back_populates="consultations_as_patient")
     doctor = db.relationship("User", foreign_keys=[doctor_id], back_populates="consultations_as_doctor")
     followups = db.relationship("FollowUp", backref="consultation", cascade="all, delete-orphan")
-    appointments = db.relationship("Appointment", back_populates="consultation")
+    appointments = db.relationship("Appointment", back_populates="consultation", cascade="all, delete-orphan")
     review = db.relationship("Review", back_populates="consultation", uselist=False, cascade="all, delete-orphan")
     files = db.relationship("FileAttachment", back_populates="consultation", cascade="all, delete-orphan")
 

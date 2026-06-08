@@ -1363,17 +1363,18 @@ def generate_ai_advice(condition: str, severity: str, symptoms: List[str]) -> st
 # SECTION 10 — ML FALLBACK (OPTIONAL)
 # ============================================================
 
-def _ml_fallback_predict(symptoms_text: str) -> Optional[List[Dict]]:
+def _ml_fallback_predict(symptoms: List[str]) -> Optional[List[Dict]]:
     """
-    Optional fallback to the old RandomForest model.
+    Fallback to the tropical RandomForest model.
+    Uses canonical symptoms (not raw text) for accurate feature mapping.
     Returns ML predictions or None if model unavailable.
     """
     try:
-        from ..symptom_model import predict_topk as ml_predict_topk
-        result = ml_predict_topk(symptoms_text)
-        if "error" in result:
+        from ..symptom_model import ml_predict
+        predictions = ml_predict(symptoms)
+        if not predictions:
             return None
-        return result.get("predictions", [])
+        return predictions
     except Exception as e:
         logger.debug(f"ML fallback unavailable: {e}")
         return None
@@ -1472,7 +1473,7 @@ def predict_topk(
 
     # Step 5: Optional ML fallback blending
     if use_ml_fallback and calibrated and calibrated[0]["confidence"] < 0.50:
-        ml_preds = _ml_fallback_predict(symptoms_text)
+        ml_preds = _ml_fallback_predict(symptoms)
         if ml_preds:
             calibrated = _blend_with_ml(calibrated, ml_preds)
 
@@ -1528,15 +1529,32 @@ def predict_topk(
 def _blend_with_ml(
     clinical_preds: List[Dict],
     ml_preds: List[Dict],
-    clinical_weight: float = 0.85,
-    ml_weight: float = 0.15,
 ) -> List[Dict]:
     """
     Blend clinical engine predictions with ML predictions.
-    Only ML diseases that are in our KB are blended.
+
+    Dynamic weighting: when clinical confidence is very low (<0.15),
+    the ML model gets more influence. When clinical is more confident,
+    clinical engine dominates.
     """
     clinical_map = {p["condition"]: p for p in clinical_preds}
     ml_map = {p["condition"]: p for p in ml_preds}
+
+    # Determine weights based on top clinical confidence
+    top_clinical_conf = max((p["confidence"] for p in clinical_preds), default=0.0)
+
+    if top_clinical_conf < 0.10:
+        # Very low clinical confidence: ML gets 60% weight
+        clinical_weight, ml_weight = 0.40, 0.60
+    elif top_clinical_conf < 0.20:
+        # Low clinical confidence: ML gets 40% weight
+        clinical_weight, ml_weight = 0.60, 0.40
+    elif top_clinical_conf < 0.35:
+        # Moderate clinical confidence: ML gets 25% weight
+        clinical_weight, ml_weight = 0.75, 0.25
+    else:
+        # Clinical is reasonably confident: ML gets 15% weight
+        clinical_weight, ml_weight = 0.85, 0.15
 
     all_diseases = set(clinical_map.keys()) | set(ml_map.keys())
     blended = []

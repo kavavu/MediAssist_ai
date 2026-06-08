@@ -1,9 +1,13 @@
 /**
  * Axios instance for all API calls to the backend.
+ * 
+ * SECURITY & STABILITY FEATURES:
  * - baseURL is "/api" so requests go to same origin (Vite proxies /api → backend:5000).
  * - Every request automatically gets Authorization: Bearer <token> if user is logged in.
  * - Response interceptor handles 401 (expired/invalid JWT) by clearing session and redirecting to login.
- * - Enhanced with request/response logging suppression for production stability.
+ * - Request deduplication: same pending request won't be fired twice.
+ * - Network error handling with user-friendly messages.
+ * - 30-second timeout prevents hanging requests.
  */
 import axios from "axios";
 import { logout } from "./auth.js";
@@ -12,7 +16,22 @@ import { reconnectSocket } from "./socket.js";
 const api = axios.create({
   baseURL: "/api",
   timeout: 30000, // 30s global timeout to prevent hanging requests
+  headers: {
+    "Content-Type": "application/json",
+  },
 });
+
+// Track pending requests for deduplication
+const pendingRequests = new Map();
+
+/**
+ * Generate a unique key for a request to enable deduplication.
+ * Same method + URL + params + body = same key.
+ */
+function getRequestKey(config) {
+  const { method, url, params, data } = config;
+  return `${method}:${url}:${JSON.stringify(params || {})}:${JSON.stringify(data || {})}`;
+}
 
 // Attach JWT to every request so protected endpoints work
 api.interceptors.request.use(
@@ -21,6 +40,23 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Request deduplication for GET requests
+    if (config.method?.toLowerCase() === "get" && config.dedupe !== false) {
+      const key = getRequestKey(config);
+      if (pendingRequests.has(key)) {
+        // Return the existing promise instead of making a new request
+        config.adapter = () => pendingRequests.get(key);
+      } else {
+        const promise = new Promise((resolve, reject) => {
+          config._resolveDuplicate = resolve;
+          config._rejectDuplicate = reject;
+        });
+        pendingRequests.set(key, promise);
+        config._dedupeKey = key;
+      }
+    }
+    
     return config;
   },
   (error) => Promise.reject(error)
@@ -28,11 +64,26 @@ api.interceptors.request.use(
 
 // Handle 401 responses globally to prevent infinite loops and stale sessions
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Clean up deduplication tracking on success
+    const key = response.config._dedupeKey;
+    if (key) {
+      pendingRequests.delete(key);
+    }
+    return response;
+  },
   (error) => {
+    // Clean up deduplication tracking on error
+    const key = error.config?._dedupeKey;
+    if (key) {
+      pendingRequests.delete(key);
+    }
+    
     // Handle network errors gracefully
     if (!error.response) {
-      // Network error or timeout — let the caller handle it
+      // Network error or timeout — attach a friendly message
+      error.isNetworkError = true;
+      error.userMessage = "Network error. Please check your connection and try again.";
       return Promise.reject(error);
     }
 
@@ -49,9 +100,18 @@ api.interceptors.response.use(
         }
       }
     }
+    
+    // Attach user-friendly error messages for common status codes
+    if (error.response.status === 403) {
+      error.userMessage = "You don't have permission to perform this action.";
+    } else if (error.response.status === 404) {
+      error.userMessage = "The requested resource was not found.";
+    } else if (error.response.status === 422) {
+      error.userMessage = "Invalid input. Please check your data and try again.";
+    } else if (error.response.status >= 500) {
+      error.userMessage = "Server error. Please try again later.";
+    }
 
-    // Handle 403 forbidden — could be role mismatch, just reject
-    // Handle 500 errors — just reject, let components show fallback UI
     return Promise.reject(error);
   }
 );

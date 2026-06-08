@@ -400,6 +400,7 @@ const HistoryModal = ({ history, onClose }) => {
 /* ------------------------------------------------------------------ */
 
 export default function DoctorDashboard() {
+  const toast = useToast();  // Global toast notifications for this dashboard
   const [consultations, setConsultations] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -408,7 +409,7 @@ export default function DoctorDashboard() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [stats, setStats] = useState({});
-  const [toast, setToast] = useState(null);
+  const [toastMsg, setToastMsg] = useState(null);
   const [newCount, setNewCount] = useState(0);
 
   /* Response form state */
@@ -461,7 +462,7 @@ export default function DoctorDashboard() {
 
       if (silent && newConsultations.length > prevCountRef.current && prevCountRef.current > 0) {
         const diff = newConsultations.length - prevCountRef.current;
-        setToast(`${diff} new patient case${diff > 1 ? "s" : ""} received`);
+        setToastMsg(`${diff} new patient case${diff > 1 ? "s" : ""} received`);
         setNewCount(diff);
         setTimeout(() => setNewCount(0), 5000);
       }
@@ -515,7 +516,7 @@ export default function DoctorDashboard() {
           // Show toast notification
           const diff = updated.length - prev.length;
           if (diff > 0) {
-            setToast(`${diff} new patient case${diff > 1 ? "s" : ""} received`);
+            setToastMsg(`${diff} new patient case${diff > 1 ? "s" : ""} received`);
             setNewCount(diff);
             setTimeout(() => setNewCount(0), 5000);
           }
@@ -609,7 +610,7 @@ export default function DoctorDashboard() {
         urgency: urgency.trim() || undefined,
       });
       await fetchData();
-      setToast("Response submitted successfully");
+      setToastMsg("Response submitted successfully");
       setIsEditing(false);
     } catch (err) {
       toast.error(err.response?.data?.error || "Failed to submit");
@@ -629,7 +630,7 @@ export default function DoctorDashboard() {
         urgency: urgency.trim() || undefined,
       });
       await fetchData();
-      setToast("Response updated successfully");
+      setToastMsg("Response updated successfully");
       setIsEditing(false);
     } catch (err) {
       toast.error(err.response?.data?.error || "Failed to update");
@@ -643,7 +644,7 @@ export default function DoctorDashboard() {
     try {
       await resolveConsultation(selected.id);
       await fetchData();
-      setToast("Case marked as resolved");
+      setToastMsg("Case marked as resolved");
     } catch (err) {
       toast.error(err.response?.data?.error || "Failed to resolve");
     }
@@ -696,37 +697,9 @@ export default function DoctorDashboard() {
   };
 
   const handleApplyAiDraft = () => {
-    // Extract sections from the full response and populate fields
-    const draft = aiFullResponse;
-    // Simple heuristic: split by common section headers
-    const lines = draft.split("\n");
-    let currentSection = "";
-    let ack = [], adv = [], tst = [], urg = [], flw = [];
-    
-    for (const line of lines) {
-      const lower = line.toLowerCase();
-      if (lower.includes("acknowledg")) { currentSection = "ack"; continue; }
-      if (lower.includes("clinical interpretation")) { currentSection = "adv"; continue; }
-      if (lower.includes("care recommendation")) { currentSection = "adv"; continue; }
-      if (lower.includes("recommended test")) { currentSection = "tst"; continue; }
-      if (lower.includes("urgency")) { currentSection = "urg"; continue; }
-      if (lower.includes("follow-up")) { currentSection = "flw"; continue; }
-      if (lower.includes("this assessment is ai-assisted")) continue;
-      if (line.trim().startsWith("---")) continue;
-      if (line.trim().startsWith("*")) continue;
-      
-      if (currentSection === "ack" && line.trim()) ack.push(line.trim());
-      if (currentSection === "adv" && line.trim()) adv.push(line.trim());
-      if (currentSection === "tst" && line.trim()) tst.push(line.trim());
-      if (currentSection === "urg" && line.trim()) urg.push(line.trim());
-      if (currentSection === "flw" && line.trim()) flw.push(line.trim());
-    }
-    
-    if (ack.length) setAcknowledgement(ack.join(" "));
-    if (adv.length) setAdvice(adv.join(" "));
-    if (tst.length) setTests(tst.join("\n"));
-    if (urg.length) setUrgency(urg.join(" "));
-    
+    // The structured fields are already populated by handleAiFullResponse
+    // when the API returns data.structured. Just ensure we're in edit mode
+    // so the doctor can review and submit.
     setShowAiDraft(false);
     setIsEditing(true);
     toast.success("AI draft applied. Review and edit before sending.");
@@ -782,7 +755,7 @@ export default function DoctorDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      {toastMsg && <Toast message={toastMsg} onClose={() => setToastMsg(null)} />}
       {showHistory && <HistoryModal history={history} onClose={() => setShowHistory(false)} />}
 
       {/* Analytics Header */}
@@ -1181,11 +1154,11 @@ export default function DoctorDashboard() {
 
                       <div className="flex gap-2 pt-2">
                         <button
-                          onClick={isEditing ? handleEditSave : handleRespond}
+                          onClick={selected?.status === "pending" ? handleRespond : (isEditing ? handleEditSave : handleRespond)}
                           disabled={submitting}
                           className="flex-1 bg-primary-600 text-white text-sm font-semibold py-2.5 rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
-                          {submitting ? "Saving..." : isEditing ? "Save Changes" : "Submit Response"}
+                          {submitting ? "Saving..." : selected?.status === "pending" ? "Submit Response" : (isEditing ? "Save Changes" : "Submit Response")}
                         </button>
                         {isEditing && (
                           <button

@@ -7,9 +7,9 @@ class FileAttachment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     consultation_id = db.Column(
-        db.Integer, db.ForeignKey("consultations.id"), nullable=False, index=True
+        db.Integer, db.ForeignKey("consultations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    uploaded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = db.Column(db.String(255), nullable=False)          # stored filename (uuid)
     original_filename = db.Column(db.String(255), nullable=False) # original user filename
     file_path = db.Column(db.String(500), nullable=False)

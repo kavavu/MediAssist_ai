@@ -27,11 +27,18 @@ class Payment(db.Model):
     )
 
     amount = db.Column(db.Numeric(10, 2), nullable=False)
-    payment_method = db.Column(db.String(32), nullable=False, default="M-Pesa")  # M-Pesa | Card | Cash
+    displayed_amount = db.Column(db.Numeric(10, 2), nullable=True)
+    payment_method = db.Column(db.String(32), nullable=False, default="M-Pesa")
     transaction_reference = db.Column(db.String(128), nullable=True, unique=True)
-    status = db.Column(db.String(32), nullable=False, default="pending")  # pending | completed | failed
+    merchant_request_id = db.Column(db.String(128), nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="pending", index=True)  # pending | processing | success | failed | cancelled
+    phone_number = db.Column(db.String(16), nullable=True)
+    mpesa_receipt_number = db.Column(db.String(64), nullable=True)
+    failure_reason = db.Column(db.String(255), nullable=True)
+    paid_at = db.Column(db.DateTime, nullable=True)
 
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user = db.relationship("User", back_populates="payments")
@@ -45,10 +52,17 @@ class Payment(db.Model):
             "appointment_id": self.appointment_id,
             "order_id": self.order_id,
             "amount": float(self.amount) if self.amount is not None else 0,
+            "displayed_amount": float(self.displayed_amount) if self.displayed_amount is not None else None,
             "payment_method": self.payment_method,
             "transaction_reference": self.transaction_reference,
+            "merchant_request_id": self.merchant_request_id,
             "status": self.status,
+            "phone_number": self.phone_number,
+            "mpesa_receipt_number": self.mpesa_receipt_number,
+            "failure_reason": self.failure_reason,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
     def __repr__(self):

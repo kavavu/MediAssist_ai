@@ -13,9 +13,9 @@ class FollowUp(db.Model):
         nullable=False, index=True,
     )
     sender_role = db.Column(db.String(16), nullable=False)  # "doctor" or "patient"
-    sender_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     message = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     sender = db.relationship("User", back_populates="followups")
 
